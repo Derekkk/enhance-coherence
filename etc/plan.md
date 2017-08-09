@@ -13,3 +13,4 @@
 3. Adopt the SummaRuNNer model and train on this dataset
 4. Adopt the coherence scorer to this part
 5. ​
+
