@@ -33,8 +33,9 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, batch_size,"
 
 def CreateHParams(flags):
   """Create Hyper-parameters from tf.app.flags.FLAGS"""
-  word_conv_k_sizes = tuple(
-      np.fromstring(flags.word_conv_k_sizes, dtype=np.int32, sep=","))
+
+  word_conv_k_sizes = [str(n) for n in flags.word_conv_k_sizes.split(",")]
+
   hps = HParams(
       mode=flags.mode,  # train, eval, decode
       lr=flags.lr,
@@ -42,18 +43,17 @@ def CreateHParams(flags):
       batch_size=flags.batch_size,
       num_sentences=flags.num_sentences,  # number of sentences in a document
       num_words_sent=flags.num_words_sent,  # number of words in a sentence
-      rel_pos_max_idx=flags.rel_pos_max_idx,
-      enc_num_hidden=flags.enc_num_hidden,  # for rnn cell
+      rel_pos_max_idx=flags.rel_pos_max_idx,  # number of relative positions
+      enc_num_hidden=flags.enc_num_hidden,  # for sentence-level rnn
       emb_dim=flags.emb_dim,
       pos_emb_dim=flags.pos_emb_dim,
       doc_repr_dim=flags.doc_repr_dim,
       word_conv_k_sizes=word_conv_k_sizes,
       word_conv_filter=flags.word_conv_filter,
-      min_num_input_sents=flags.min_num_input_sents,
-      min_num_words_sent=flags.min_num_words_sent,
+      min_num_input_sents=flags.min_num_input_sents,  # for batch reader
+      min_num_words_sent=flags.min_num_words_sent,  # for batch reader
       max_grad_norm=4.0,
-      extract_topk=flags.extract_topk,
-      trg_weight_norm=flags.trg_weight_norm)
+      extract_topk=flags.extract_topk)  # for decode mode
   return hps
 
 
@@ -95,13 +95,11 @@ class SummaRuNNer(object):
 
   def __init__(self, hps, input_vocab, output_vocab=None, num_gpus=0):
     if hps.mode not in ["train", "decode"]:
-      raise ValueError("Only train and decode mode are accepted. "
-                       "For eval/demo/debug mode, please reduce to these modes "
-                       "for build_graph().")
+      raise ValueError("Only train and decode mode are supported.")
+
     self._hps = hps
     self._input_vocab = input_vocab
     self._num_gpus = num_gpus
-    self._cur_gpu = 0
 
   def build_graph(self):
     self._allocate_devices()
@@ -117,13 +115,18 @@ class SummaRuNNer(object):
 
   def _allocate_devices(self):
     num_gpus = self._num_gpus
+    assert num_gpus >= 0
+
     if num_gpus == 0:
       raise ValueError("Current implementation requires at least one GPU.")
     elif num_gpus == 1:
       self._device_0 = "/gpu:0"
       self._device_1 = "/gpu:0"
       self._device_2 = "/gpu:0"
-    else:
+    elif num_gpus > 1:
+      self._device_0 = "/gpu:0"
+      self._device_1 = "/gpu:0"
+      self._device_2 = "/gpu:0"
       tf.logging.warn("Current implementation uses at most one GPU.")
 
   def _add_placeholders(self):

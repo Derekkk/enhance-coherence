@@ -64,8 +64,8 @@ tf.app.flags.DEFINE_integer("beam_size", 10,
 tf.app.flags.DEFINE_string("decode_dir", "", "Directory for decode summaries.")
 tf.app.flags.DEFINE_bool("exclude_unks", False,
                          "True if <UNK> is forbidden when beam search.")
-tf.app.flags.DEFINE_integer("decode_verbosity", 20,
-                            "Verbosity when decoding (default INFO).")
+tf.app.flags.DEFINE_integer("verbosity", 20,
+                            "tf.logging verbosity (default INFO).")
 # ----------- seq2seq related flags ----------------
 tf.app.flags.DEFINE_integer("num_softmax_samples", 1024,
                             "Number of samples in sampled cross-entropy.")
@@ -150,9 +150,10 @@ tf.app.flags.DEFINE_bool("sep_reuse_embed", True,
 
 def _Train(model, data_batcher, valid_batcher, train_loop):
   """Runs model training."""
-  with tf.device("/cpu:0"):  # CPU by default
+  with tf.device("/gpu:0"):  # GPU by default
     restorer = model.build_graph()
 
+  # Restore pretrained model if necessary
   if FLAGS.restore_pretrain and restorer is not None:
     ckpt_state = tf.train.get_checkpoint_state(FLAGS.pretrain_dir)
     if not (ckpt_state and ckpt_state.model_checkpoint_path):
@@ -162,7 +163,6 @@ def _Train(model, data_batcher, valid_batcher, train_loop):
       tf.logging.info("Restoring pretrained model from %s" %
                       ckpt_state.model_checkpoint_path)
       restorer.restore(sess, ckpt_state.model_checkpoint_path)
-
   else:
     load_pretrain = None
 
@@ -174,11 +174,11 @@ def _Train(model, data_batcher, valid_batcher, train_loop):
       save_summaries_secs=FLAGS.checkpoint_secs,
       save_model_secs=FLAGS.checkpoint_secs,
       global_step=model.global_step,
-      init_fn=load_pretrain)
+      init_fn=load_pretrain)  # TODO: could exploit more Supervisor features
 
   config = tf.ConfigProto(allow_soft_placement=True)
-  # Turn on JIT compilation
-  # config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+  # Turn on JIT compilation if necessary
+  config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
   sess = sv.prepare_or_wait_for_session(config=config)
 
   # Summary dir is different from ckpt_root to avoid conflict.
@@ -192,125 +192,67 @@ def _Train(model, data_batcher, valid_batcher, train_loop):
 
 def main():
   # Configure enviroments
-  tf.logging.set_verbosity(tf.logging.INFO)
+  tf.logging.set_verbosity(FLAGS.verbosity)
 
   # Import model
   model_type = FLAGS.model
-  if model_type == "seq2seq":
-    from models.seq2seq import CreateHParams, TrainLoop
-    from models.seq2seq import Seq2seq as Model
-  elif model_type == "summarunner":
+  if model_type == "summarunner":
     from models.summarunner import CreateHParams, TrainLoop
     from models.summarunner import SummaRuNNer as Model
-  elif model_type == "summarunner_abs":
-    from models.summarunner_abs import CreateHParams, TrainLoop
-    from models.summarunner_abs import SummaRuNNerAbs as Model
-  elif model_type == "cnn2seq":
-    from models.cnn2seq import CreateHParams, TrainLoop
-    from models.cnn2seq import CNN2Seq as Model
-  elif model_type == "structure_net":
-    from models.structure_net import CreateHParams, TrainLoop
-    from models.structure_net import StructureNet as Model
-  elif model_type == "structure_net_rf":
-    from models.structure_net_rf import CreateHParams, TrainLoop
-    from models.structure_net_rf import RFStructureNet as Model
-  elif model_type == "separation_net":
-    from models.separation_net import CreateHParams, TrainLoop
-    from models.separation_net import SeparationNet as Model
   else:
     raise ValueError("%s model NOT defined." % model_type)
   tf.logging.info("Using model %s." % model_type.upper())
+
+  # Build vocabs
+  input_vocab = vocab.Vocab(FLAGS.input_vocab, FLAGS.input_vsize)
+  output_vocab = None
 
   # Create model hyper-parameters
   hps = CreateHParams(FLAGS)
   tf.logging.info("Using the following hyper-parameters:\n%r" % str(hps))
 
-  # Build vocabs
-  input_vocab = vocab.Vocab(FLAGS.input_vocab, FLAGS.input_vsize)
-  if model_type == "summarunner":
-    output_vocab = None
+  if FLAGS.mode == "train":
+    num_epochs = None  # infinite loop
+    shuffle_batches = True
   else:
-    output_vocab = vocab.Vocab(
-        FLAGS.output_vocab,
-        FLAGS.output_vsize,
-        random_unk=FLAGS.random_unk,
-        enable_full_vocab=FLAGS.enable_full_vocab)
-
-  # Create data reader
-  if FLAGS.mode in ["eval", "decode"]:
-    FLAGS.batch_size = 1  # read one by one so that no test example will be dropped
     num_epochs = 1  # only go through test set once
     shuffle_batches = False  # do not shuffle the batches
-  else:
-    num_epochs = None
-    shuffle_batches = True
+    hps._replace(batch_size=1)  # ensure all examples are used
 
+  # Create data reader
   if model_type == "summarunner":
     batcher = batch_reader.ExtractiveBatcher(
         FLAGS.data_path,
         input_vocab,
         hps,
-        read_mode=FLAGS.read_mode,
         bucketing=FLAGS.use_bucketing,
         truncate_input=FLAGS.truncate_input,
         num_epochs=num_epochs,
         shuffle_batches=shuffle_batches)
-  else:
-    batcher = batch_reader.Batcher(
-        FLAGS.data_path,
-        input_vocab,
-        output_vocab,
-        hps,
-        bucketing=FLAGS.use_bucketing,
-        truncate_input=FLAGS.truncate_input,
-        num_epochs=num_epochs,
-        shuffle_batches=shuffle_batches)
-
-  if hps.mode == "train":  # Train the model
-    model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
-
-    # Create validation data reader
-    if model_type == "summarunner":
+    if FLAGS.mode == "train":
+      # Create validation data reader
       valid_batcher = batch_reader.ExtractiveBatcher(
           FLAGS.valid_path,
           input_vocab,
           hps,
-          read_mode=FLAGS.read_mode,
-          bucketing=FLAGS.use_bucketing,
-          truncate_input=FLAGS.truncate_input,
-          num_epochs=num_epochs,
-          shuffle_batches=shuffle_batches)
-    else:
-      valid_batcher = batch_reader.Batcher(
-          FLAGS.valid_path,
-          input_vocab,
-          output_vocab,
-          hps,
           bucketing=FLAGS.use_bucketing,
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
           shuffle_batches=shuffle_batches)
 
-    # Start training the model
-    _Train(model, batcher, valid_batcher, TrainLoop)
+  else:
+    raise NotImplementedError()
 
-  elif hps.mode == "decode":  # Decode with beam search
-    tf.logging.set_verbosity(FLAGS.decode_verbosity)  # Avoid long printing
+  if FLAGS.mode == "train":
+    model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
+    _Train(model, batcher, valid_batcher, TrainLoop)  # start training
+  elif FLAGS.mode == "decode":
     model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
     decoder = SummaRuNNerDecoder(model, batcher, hps)
     ref_fn, dec_fn = decoder.DecodeLoop()
     # evaluate_files(ref_fn, dec_fn)
-
-  elif hps.mode == "demo":  # Run demo in console
-    decode_mdl_hps = hps._replace(
-        dec_timesteps=1, batch_size=None, mode="decode")
-    model = structure_net.Seq2SeqAttentionModel(
-        decode_mdl_hps, vocab, num_gpus=FLAGS.num_gpus)
-    decoder = BSDemoDecoder(model, hps, vocab)
-    decoder.DecodeLoop()
-
   else:
-    raise ValueError("Invalid mode %s." % hps.mode)
+    raise ValueError("Invalid mode %s. Try train/decode instead." % FLAGS.mode)
 
 
 if __name__ == "__main__":
