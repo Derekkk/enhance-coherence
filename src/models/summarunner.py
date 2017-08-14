@@ -104,7 +104,7 @@ class SummaRuNNer(object):
   def build_graph(self):
     self._allocate_devices()
     self._add_placeholders()
-    self._add_seq2seq()
+    self._build_model()
     self.global_step = tf.Variable(0, name="global_step", trainable=False)
 
     if self._hps.mode == "train":
@@ -122,11 +122,9 @@ class SummaRuNNer(object):
     elif num_gpus == 1:
       self._device_0 = "/gpu:0"
       self._device_1 = "/gpu:0"
-      self._device_2 = "/gpu:0"
     elif num_gpus > 1:
       self._device_0 = "/gpu:0"
       self._device_1 = "/gpu:0"
-      self._device_2 = "/gpu:0"
       tf.logging.warn("Current implementation uses at most one GPU.")
 
   def _add_placeholders(self):
@@ -146,31 +144,33 @@ class SummaRuNNer(object):
     # Output extraction decisions
     self._extract_targets = tf.placeholder(
         tf.int32, [hps.batch_size, hps.num_sentences], name="extract_targets")
+    # May weight the extraction decisions differently
     self._target_weights = tf.placeholder(
         tf.float32, [hps.batch_size, hps.num_sentences], name="target_weights")
 
-  def _add_seq2seq(self):
+  def _build_model(self):
+    """Construct the deep neural network of SummaRuNNer."""
     hps = self._hps
 
     batch_size_ts = hps.batch_size  # batch size Tensor
     if hps.batch_size is None:
       batch_size_ts = tf.shape(inputs)[0]
 
-    with tf.variable_scope("seq2seq"):
+    with tf.variable_scope("summarunner"):
       with tf.variable_scope("embeddings"):
         self._add_embeddings()
 
       # Encoder
       with tf.variable_scope("encoder"), tf.device(self._device_0):
-        # Two-layer encoding of input document
+        # Hierarchical encoding of input document
         sentence_vecs = self._add_encoder(
             self._inputs, self._input_sent_lens, self._input_doc_lens
-        )  # [num_sentences, batch_size, enc_num_hidden*2]
-        # Output size of Bi-LSTM is double of enc_num_hidden
+        )  # [batch_size, num_sentences, enc_num_hidden*2]
+        # Note: output size of Bi-LSTM is double of enc_num_hidden
 
         # Document representation
         doc_mean_vec = tf.div(
-            tf.reduce_sum(sentence_vecs, 0),
+            tf.reduce_sum(sentence_vecs, 1),
             tf.expand_dims(tf.to_float(self._input_doc_lens),
                            1))  # [batch_size, enc_num_hidden*2]
         doc_repr = tf.tanh(
@@ -179,22 +179,22 @@ class SummaRuNNer(object):
 
         # Absolute position embedding
         abs_pos_idx = tf.expand_dims(tf.range(0, hps.num_sentences),
-                                     1)  # [num_sentences, 1]
+                                     0)  # [1, num_sentences]
 
         abs_pos_batch = tf.tile(abs_pos_idx, tf.stack(
-            [1, batch_size_ts]))  # [num_sentences, batch_size]
+            [batch_size_ts, 1]))  # [batch_size, num_sentences]
         sent_abs_pos_emb = tf.nn.embedding_lookup(
             self._abs_pos_embed,
-            abs_pos_batch)  # [num_sentences, batch_size, pos_emb_dim]
+            abs_pos_batch)  # [batch_size, num_sentences, pos_emb_dim]
 
         # Relative position embedding
         sent_rel_pos_emb = tf.nn.embedding_lookup(
             self._rel_pos_embed,
             self._input_rel_pos)  # [batch_size, num_sentences, pos_emb_dim]
 
-        # Unstack the features into list: num_sentences * [batch_size, enc_num_hidden*2]
-        sentence_vecs_list = tf.unstack(sentence_vecs, axis=0)
-        abs_pos_emb_list = tf.unstack(sent_abs_pos_emb, axis=0)
+        # Unstack the features into list: num_sentences * [batch_size, ?]
+        sentence_vecs_list = tf.unstack(sentence_vecs, axis=1)
+        abs_pos_emb_list = tf.unstack(sent_abs_pos_emb, axis=1)
         rel_pos_emb_list = tf.unstack(sent_rel_pos_emb, axis=1)
 
       # Compute the extraction probability of each sentence
@@ -210,8 +210,7 @@ class SummaRuNNer(object):
 
         # Initialize the representation of all historical summaries extracted
         hist_summary = tf.zeros_like(sentence_vecs_list[0])
-        hist_summary_list = []
-        extract_logit_list, extract_prob_list = [], []
+        extract_logit_list, extract_prob_list, hist_summary_list = [], [], []
 
         for i in xrange(hps.num_sentences):
           cur_sent_vec = sentence_vecs_list[i]
@@ -243,15 +242,17 @@ class SummaRuNNer(object):
     input_vsize = self._input_vocab.NumIds
 
     with tf.device(self._device_0):
-      # Input embedding
+      # Input word embeddings
       self._input_embed = tf.get_variable(
           "input_embed", [input_vsize, hps.emb_dim],
           dtype=tf.float32,
           initializer=tf.truncated_normal_initializer(stddev=1e-4))
+      # Absolute position embeddings
       self._abs_pos_embed = tf.get_variable(
           "abs_pos_embed", [hps.num_sentences, hps.pos_emb_dim],
           dtype=tf.float32,
           initializer=tf.truncated_normal_initializer(stddev=1e-4))
+      # Relative position embeddings
       self._rel_pos_embed = tf.get_variable(
           "rel_pos_embed", [hps.rel_pos_max_idx, hps.pos_emb_dim],
           dtype=tf.float32,
@@ -260,72 +261,93 @@ class SummaRuNNer(object):
   def _add_encoder(self, inputs, sent_lens, doc_lens, transpose_output=False):
     hps = self._hps
 
-    # Masking the words
-    sent_lens_rsp = tf.reshape(sent_lens, [-1])  #[batch_size * num_sentences]
-    word_masks = tf.sequence_mask(
-        sent_lens_rsp, maxlen=hps.num_words_sent,
-        dtype=tf.float32)  # [batch_size * num_sentences, num_words_sent]
-    word_masks_rsp = tf.expand_dims(word_masks, 2)
+    # Masking the word embeddings
+    sent_lens_rsp = tf.reshape(sent_lens, [-1])  # [batch_size * num_sentences]
+    word_masks = tf.expand_dims(
+        tf.sequence_mask(
+            sent_lens_rsp, maxlen=hps.num_words_sent, dtype=tf.float32),
+        2)  # [batch_size * num_sentences, num_words_sent, 1]
 
     inputs_rsp = tf.reshape(inputs, [-1, hps.num_words_sent])
     emb_inputs = tf.nn.embedding_lookup(
         self._input_embed,
         inputs_rsp)  # [batch_size * num_sentences, num_words_sent, emb_size]
-    emb_inputs = emb_inputs * word_masks_rsp
+    emb_inputs = emb_inputs * word_masks
 
     # Level 1: Add the word-level convolutional neural network
     word_conv_outputs = []
     for k_size in hps.word_conv_k_sizes:
+      # Create CNNs with different kernel width
       word_conv_k = tf.layers.conv1d(
           emb_inputs,
           hps.word_conv_filter, (k_size,),
           padding="same",
           kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1))
-      max_pool_sent = tf.reduce_max(
+      mean_pool_sent = tf.reduce_mean(
           word_conv_k, axis=1)  # [batch_size * num_sentences, word_conv_filter]
-      word_conv_outputs.append(max_pool_sent)
+      word_conv_outputs.append(mean_pool_sent)
 
     word_conv_output = tf.concat(
         word_conv_outputs, axis=1)  # concat the sentence representations
-    # Reshape into representations for sentences
+    # Reshape the representations of sentences
     sentence_size = len(hps.word_conv_k_sizes) * hps.word_conv_filter
-    sentence_vecs = tf.reshape(word_conv_output, [
+    sentence_repr = tf.reshape(word_conv_output, [
         -1, hps.num_sentences, sentence_size
     ])  # [batch_size, num_sentences, sentence_size]
 
     # Level 2: Add the sentence-level RNN
-    enc_model = cudnn_rnn_ops.CudnnLSTM(
-        1, hps.enc_num_hidden, sentence_size, direction="bidirectional")
-    # Compute the total size of RNN params (Tensor)
-    params_size_ts = enc_model.params_size()
-    params = tf.Variable(
-        tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
-        validate_shape=False,
-        name="encoder_cudnn_lstm_var")
+    cell_fw = GRUCell(
+        hps.enc_num_hidden,
+        kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+        bias_initializer=tf.random_uniform_initializer(-0.1, 0.1))
+    cell_bw = GRUCell(
+        hps.enc_num_hidden,
+        kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+        bias_initializer=tf.random_uniform_initializer(-0.1, 0.1))
 
-    batch_size_ts = tf.shape(inputs)[0]  # batch size Tensor
-    init_state = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
-    init_c = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
+    sent_rnn_fw_bw, _ = tf.nn.bidirectional_dynamic_rnn(
+        cell_fw,
+        cell_bw,
+        sentence_repr,
+        sequence_length=doc_lens,
+        dtype=tf.float32,
+        parallel_iterations=hps.batch_size,
+        scope="sent_level_enc_gru")
+    sent_rnn_output = tf.concat(
+        sent_rnn_fw_bw, axis=2)  # [batch_size, num_sentences, enc_num_hidden*2]
 
-    # Call the CudnnLSTM
-    sentence_vecs_t = tf.transpose(sentence_vecs, [1, 0, 2])
-    sent_rnn_output, _, _ = enc_model(
-        input_data=sentence_vecs_t,
-        input_h=init_state,
-        input_c=init_c,
-        params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
+    # enc_model = cudnn_rnn_ops.CudnnLSTM(
+    #     1, hps.enc_num_hidden, sentence_size, direction="bidirectional")
+    # # Compute the total size of RNN params (Tensor)
+    # params_size_ts = enc_model.params_size()
+    # params = tf.Variable(
+    #     tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
+    #     validate_shape=False,
+    #     name="encoder_cudnn_lstm_var")
 
-    # Masking the paddings
-    sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sentences,
-                                      tf.float32)  # [batch_size, num_sentences]
-    sent_out_masks = tf.expand_dims(tf.transpose(sent_out_masks),
-                                    2)  # [num_sentences, batch_size, 1]
-    sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sentences, batch_size, enc_num_hidden*2]
+    # batch_size_ts = tf.shape(inputs)[0]  # batch size Tensor
+    # init_state = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
+    # init_c = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
 
-    if transpose_output:
-      sent_rnn_output = tf.transpose(
-          sent_rnn_output, [1, 0,
-                            2])  # [batch_size, num_sentences, enc_num_hidden*2]
+    # # Call the CudnnLSTM
+    # sentence_vecs_t = tf.transpose(sentence_repr, [1, 0, 2])
+    # sent_rnn_output, _, _ = enc_model(
+    #     input_data=sentence_vecs_t,
+    #     input_h=init_state,
+    #     input_c=init_c,
+    #     params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
+
+    # # Masking the paddings
+    # sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sentences,
+    #                                   tf.float32)  # [batch_size, num_sentences]
+    # sent_out_masks = tf.expand_dims(tf.transpose(sent_out_masks),
+    #                                 2)  # [num_sentences, batch_size, 1]
+    # sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sentences, batch_size, enc_num_hidden*2]
+
+    # if transpose_output:
+    #   sent_rnn_output = tf.transpose(
+    #       sent_rnn_output, [1, 0,
+    #                         2])  # [batch_size, num_sentences, enc_num_hidden*2]
 
     return sent_rnn_output
 
@@ -348,7 +370,8 @@ class SummaRuNNer(object):
         "W_novelty", [hps.enc_num_hidden * 2, hps.enc_num_hidden * 2],
         dtype=tf.float32,
         initializer=tf.random_uniform_initializer(-0.1, 0.1))
-
+    #TODO: how to ensure W_n is PSD.
+    #TODO: could we use mean instead of tanh?
     novelty = -tf.reduce_sum(
         tf.multiply(tf.matmul(sent_vec, W_n), tf.tanh(hist_summary)),
         1,
@@ -361,13 +384,9 @@ class SummaRuNNer(object):
     return extract_logit, extract_prob  # [batch_size, 1]
 
   def _add_loss(self):
-    self._loss = self._add_extract_loss()
-    tf.summary.scalar("loss", self._loss)
-
-  def _add_extract_loss(self):
     hps = self._hps
 
-    with tf.variable_scope("loss"), tf.device(self._device_2):
+    with tf.variable_scope("loss"), tf.device(self._device_1):
       extract_targets = tf.to_float(self._extract_targets)
       # Masking the loss
       loss_mask = tf.sequence_mask(
@@ -378,28 +397,31 @@ class SummaRuNNer(object):
           logits=self._extract_logits,
           name="extract_XE_loss")
 
-      extract_loss = tf.reduce_mean(xe_loss * self._target_weights * loss_mask)
-      # tf.summary.scalar("extract_loss", extract_loss)
+      # loss = tf.reduce_mean(xe_loss * loss_mask)
+      loss = tf.reduce_mean(xe_loss * self._target_weights * loss_mask)
 
-    return extract_loss
+    tf.summary.scalar("loss", loss)
+    self._loss = loss
 
   def _add_train_op(self):
     """Sets self._train_op, op to run for training."""
     hps = self._hps
-    self._lr_rate = tf.maximum(
-        hps.min_lr,  # minimum learning rate.
-        tf.train.exponential_decay(hps.lr, self.global_step, 30000, 0.98))
-    tf.summary.scalar("learning_rate", self._lr_rate)
-
-    # Compute gradients
     tvars = tf.trainable_variables()
-    with tf.device(self._device_2):
+
+    with tf.device(self._device_1):
+      # Compute gradients
       grads, global_norm = tf.clip_by_global_norm(
           tf.gradients(self._loss, tvars), hps.max_grad_norm)
       tf.summary.scalar("global_norm", global_norm)
 
+      # self._lr_rate = tf.maximum(
+      #     hps.min_lr,  # minimum learning rate.
+      #     tf.train.exponential_decay(hps.lr, self.global_step, 30000, 0.98))
+      # tf.summary.scalar("learning_rate", self._lr_rate)
+
       # Create optimizer and train ops
-      optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
+      # optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
+      optimizer = tf.train.AdamOptimizer(hps.lr)
       self._train_op = optimizer.apply_gradients(
           zip(grads, tvars), global_step=self.global_step, name="train_step")
 
