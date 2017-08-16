@@ -378,7 +378,8 @@ class SummaRuNNer(object):
           name="extract_XE_loss")
 
       # loss = tf.reduce_mean(xe_loss * loss_mask)
-      loss = tf.reduce_mean(xe_loss * self._target_weights * loss_mask)
+      batch_loss = tf.div(tf.reduce_sum(xe_loss * self._target_weights * loss_mask, 1),  tf.to_float(self._input_doc_lens))
+      loss = tf.reduce_mean(batch_loss)
 
     tf.summary.scalar("loss", loss)
     self._loss = loss
