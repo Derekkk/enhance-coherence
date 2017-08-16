@@ -17,7 +17,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.util import nest
-from memory import MemoryWrapper
+# from memory import MemoryWrapper
 
 
 def compute_avg(values, summary_writer, tag_name, step):

@@ -20,7 +20,7 @@ from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 from tensorflow.contrib.rnn import GRUCell
 
 import lib
-import memory
+# import memory
 
 # NB: batch_size could be unspecified (None) in decode mode
 HParams = namedtuple("HParams", "mode, min_lr, lr, batch_size,"
@@ -52,8 +52,9 @@ def CreateHParams(flags):
       word_conv_filter=flags.word_conv_filter,
       min_num_input_sents=flags.min_num_input_sents,  # for batch reader
       min_num_words_sent=flags.min_num_words_sent,  # for batch reader
-      max_grad_norm=4.0,
-      extract_topk=flags.extract_topk)  # for decode mode
+      max_grad_norm=flags.max_grad_norm,
+      extract_topk=flags.extract_topk,  # for decode mode
+      trg_weight_norm=flags.trg_weight_norm)
   return hps
 
 
@@ -165,12 +166,12 @@ class SummaRuNNer(object):
         # Hierarchical encoding of input document
         sentence_vecs = self._add_encoder(
             self._inputs, self._input_sent_lens, self._input_doc_lens
-        )  # [batch_size, num_sentences, enc_num_hidden*2]
-        # Note: output size of Bi-LSTM is double of enc_num_hidden
+        )  # [num_sentences, batch_size, enc_num_hidden*2]
+        # Note: output size of Bi-RNN is double of the enc_num_hidden
 
         # Document representation
         doc_mean_vec = tf.div(
-            tf.reduce_sum(sentence_vecs, 1),
+            tf.reduce_sum(sentence_vecs, 0),
             tf.expand_dims(tf.to_float(self._input_doc_lens),
                            1))  # [batch_size, enc_num_hidden*2]
         doc_repr = tf.tanh(
@@ -179,13 +180,13 @@ class SummaRuNNer(object):
 
         # Absolute position embedding
         abs_pos_idx = tf.expand_dims(tf.range(0, hps.num_sentences),
-                                     0)  # [1, num_sentences]
+                                     1)  # [num_sentences, 1]
 
         abs_pos_batch = tf.tile(abs_pos_idx, tf.stack(
-            [batch_size_ts, 1]))  # [batch_size, num_sentences]
+            [1, batch_size_ts]))  # [num_sentences, batch_size]
         sent_abs_pos_emb = tf.nn.embedding_lookup(
             self._abs_pos_embed,
-            abs_pos_batch)  # [batch_size, num_sentences, pos_emb_dim]
+            abs_pos_batch)  # [num_sentences, batch_size, pos_emb_dim]
 
         # Relative position embedding
         sent_rel_pos_emb = tf.nn.embedding_lookup(
@@ -193,8 +194,8 @@ class SummaRuNNer(object):
             self._input_rel_pos)  # [batch_size, num_sentences, pos_emb_dim]
 
         # Unstack the features into list: num_sentences * [batch_size, ?]
-        sentence_vecs_list = tf.unstack(sentence_vecs, axis=1)
-        abs_pos_emb_list = tf.unstack(sent_abs_pos_emb, axis=1)
+        sentence_vecs_list = tf.unstack(sentence_vecs, axis=0)
+        abs_pos_emb_list = tf.unstack(sent_abs_pos_emb, axis=0)
         rel_pos_emb_list = tf.unstack(sent_rel_pos_emb, axis=1)
 
       # Compute the extraction probability of each sentence
@@ -296,58 +297,37 @@ class SummaRuNNer(object):
     ])  # [batch_size, num_sentences, sentence_size]
 
     # Level 2: Add the sentence-level RNN
-    cell_fw = GRUCell(
-        hps.enc_num_hidden,
-        kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
-        bias_initializer=tf.random_uniform_initializer(-0.1, 0.1))
-    cell_bw = GRUCell(
-        hps.enc_num_hidden,
-        kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
-        bias_initializer=tf.random_uniform_initializer(-0.1, 0.1))
+    enc_model = cudnn_rnn_ops.CudnnGRU(
+        1, hps.enc_num_hidden, sentence_size, direction="bidirectional")
+    # Compute the total size of RNN params (Tensor)
+    params_size_ts = enc_model.params_size()
+    params = tf.Variable(
+        tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
+        validate_shape=False,
+        name="encoder_cudnn_gru_var")
 
-    sent_rnn_fw_bw, _ = tf.nn.bidirectional_dynamic_rnn(
-        cell_fw,
-        cell_bw,
-        sentence_repr,
-        sequence_length=doc_lens,
-        dtype=tf.float32,
-        parallel_iterations=hps.batch_size,
-        scope="sent_level_enc_gru")
-    sent_rnn_output = tf.concat(
-        sent_rnn_fw_bw, axis=2)  # [batch_size, num_sentences, enc_num_hidden*2]
-
-    # enc_model = cudnn_rnn_ops.CudnnLSTM(
-    #     1, hps.enc_num_hidden, sentence_size, direction="bidirectional")
-    # # Compute the total size of RNN params (Tensor)
-    # params_size_ts = enc_model.params_size()
-    # params = tf.Variable(
-    #     tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
-    #     validate_shape=False,
-    #     name="encoder_cudnn_lstm_var")
-
-    # batch_size_ts = tf.shape(inputs)[0]  # batch size Tensor
-    # init_state = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
+    batch_size_ts = tf.shape(inputs)[0]  # batch size Tensor
+    init_state = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
     # init_c = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
 
-    # # Call the CudnnLSTM
-    # sentence_vecs_t = tf.transpose(sentence_repr, [1, 0, 2])
-    # sent_rnn_output, _, _ = enc_model(
-    #     input_data=sentence_vecs_t,
-    #     input_h=init_state,
-    #     input_c=init_c,
-    #     params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
+    # Call the CudnnGRU
+    sentence_vecs_t = tf.transpose(sentence_repr, [1, 0, 2])
+    sent_rnn_output, _ = enc_model(
+        input_data=sentence_vecs_t,
+        input_h=init_state,
+        params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
 
-    # # Masking the paddings
-    # sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sentences,
-    #                                   tf.float32)  # [batch_size, num_sentences]
-    # sent_out_masks = tf.expand_dims(tf.transpose(sent_out_masks),
-    #                                 2)  # [num_sentences, batch_size, 1]
-    # sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sentences, batch_size, enc_num_hidden*2]
+    # Masking the paddings
+    sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sentences,
+                                      tf.float32)  # [batch_size, num_sentences]
+    sent_out_masks = tf.expand_dims(tf.transpose(sent_out_masks),
+                                    2)  # [num_sentences, batch_size, 1]
+    sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sentences, batch_size, enc_num_hidden*2]
 
-    # if transpose_output:
-    #   sent_rnn_output = tf.transpose(
-    #       sent_rnn_output, [1, 0,
-    #                         2])  # [batch_size, num_sentences, enc_num_hidden*2]
+    if transpose_output:
+      sent_rnn_output = tf.transpose(
+          sent_rnn_output, [1, 0,
+                            2])  # [batch_size, num_sentences, enc_num_hidden*2]
 
     return sent_rnn_output
 
@@ -406,28 +386,27 @@ class SummaRuNNer(object):
   def _add_train_op(self):
     """Sets self._train_op, op to run for training."""
     hps = self._hps
-    tvars = tf.trainable_variables()
 
+    self._lr_rate = tf.maximum(
+        hps.min_lr,  # minimum learning rate.
+        tf.train.exponential_decay(hps.lr, self.global_step, 30000, 0.98))
+    tf.summary.scalar("learning_rate", self._lr_rate)
+
+    tvars = tf.trainable_variables()
     with tf.device(self._device_1):
       # Compute gradients
       grads, global_norm = tf.clip_by_global_norm(
           tf.gradients(self._loss, tvars), hps.max_grad_norm)
       tf.summary.scalar("global_norm", global_norm)
 
-      # self._lr_rate = tf.maximum(
-      #     hps.min_lr,  # minimum learning rate.
-      #     tf.train.exponential_decay(hps.lr, self.global_step, 30000, 0.98))
-      # tf.summary.scalar("learning_rate", self._lr_rate)
-
       # Create optimizer and train ops
-      # optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
-      optimizer = tf.train.AdamOptimizer(hps.lr)
+      optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
       self._train_op = optimizer.apply_gradients(
           zip(grads, tvars), global_step=self.global_step, name="train_step")
 
   def run_train_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights) = batch
+     target_weights, _) = batch
 
     to_return = [self._train_op, self._summaries, self._loss, self.global_step]
     results = sess.run(
@@ -444,7 +423,7 @@ class SummaRuNNer(object):
 
   def run_eval_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights) = batch
+     target_weights, _) = batch
 
     to_return = [self._loss, self.global_step]
     results = sess.run(

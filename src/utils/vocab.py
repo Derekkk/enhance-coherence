@@ -15,10 +15,6 @@
 import random
 
 # Special tokens
-# PARAGRAPH_START = '<p>'
-# PARAGRAPH_END = '</p>'
-# DOCUMENT_START = '<d>'
-# DOCUMENT_END = '</d>'
 SENTENCE_START = '<s>'
 SENTENCE_END = '</s>'
 UNKNOWN_TOKEN = '<UNK>'
@@ -107,4 +103,3 @@ class Vocab(object):
     """
     assert isinstance(ids_list, list), '%s is not a list' % ids_list
     return [self.IdToWord(i) for i in ids_list]
-

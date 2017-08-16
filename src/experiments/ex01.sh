@@ -1,0 +1,30 @@
+export CUDA_VISIBLE_DEVICES=2
+python run.py \
+  --model=summarunner \
+  --data_path=data/cnn/training.pkl \
+  --input_vocab=data/cnn/training.vocab \
+  --input_vsize 150000 \
+  --ckpt_root=checkpoints/ex01 \
+  --summary_dir=log/ex01 \
+  --mode=train \
+  --lr 0.1 \
+  --min_lr 0.001 \
+  --batch_size 64 \
+  --max_run_steps 1000000 \
+  --num_gpus 1 \
+  --valid_path=data/cnn/validation.pkl \
+  --valid_freq 1000 \
+  --checkpoint_secs 1800 \
+  --display_freq 200 \
+  --use_bucketing False \
+  --truncate_input True \
+  --emb_dim 128 \
+  --num_sentences 80 \
+  --num_words_sent 50 \
+  --rel_pos_max_idx 11 \
+  --enc_num_hidden 256 \
+  --pos_emb_dim 64 \
+  --doc_repr_dim 512 \
+  --word_conv_k_sizes '1,3,5,7' \
+  --word_conv_filter 128 \
+  --min_num_input_sents 3 \
