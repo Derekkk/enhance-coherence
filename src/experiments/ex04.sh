@@ -1,23 +1,21 @@
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 python run.py \
   --model=summarunner \
   --data_path=data/cnn/training.pkl \
   --input_vocab=data/cnn/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/ex01 \
-  --summary_dir=log/ex01 \
+  --ckpt_root=checkpoints/ex04 \
+  --summary_dir=log/ex04 \
   --mode=train \
-  --lr 0.1 \
+  --lr 0.0001 \
   --min_lr 0.00001 \
-  --decay_step 30000 \
-  --decay_rate 0.5 \
   --batch_size 64 \
   --max_run_steps 1000000 \
   --num_gpus 1 \
   --valid_path=data/cnn/validation.pkl \
   --valid_freq 1000 \
   --checkpoint_secs 1800 \
-  --display_freq 100 \
+  --display_freq 200 \
   --use_bucketing False \
   --truncate_input True \
   --emb_dim 128 \

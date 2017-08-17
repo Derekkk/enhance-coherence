@@ -34,6 +34,8 @@ tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
 tf.app.flags.DEFINE_float("max_grad_norm", 4.0,
                           "Maximum gradient norm for gradient clipping.")
+tf.app.flags.DEFINE_integer("decay_step", 30000, "Exponential decay step.")
+tf.app.flags.DEFINE_float("decay_rate", 0.1, "Exponential decay rate.")
 tf.app.flags.DEFINE_integer("max_run_steps", 1000000,
                             "Maximum number of run steps.")
 tf.app.flags.DEFINE_string("valid_path", "",

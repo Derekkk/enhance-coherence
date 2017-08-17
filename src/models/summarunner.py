@@ -28,7 +28,8 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, batch_size,"
                      "enc_num_hidden, emb_dim, pos_emb_dim, doc_repr_dim,"
                      "word_conv_k_sizes, word_conv_filter,"
                      "min_num_input_sents, min_num_words_sent,"
-                     "max_grad_norm, extract_topk, trg_weight_norm")
+                     "max_grad_norm, decay_step, decay_rate,"
+                     "extract_topk, trg_weight_norm")
 
 
 def CreateHParams(flags):
@@ -53,6 +54,8 @@ def CreateHParams(flags):
       min_num_input_sents=flags.min_num_input_sents,  # for batch reader
       min_num_words_sent=flags.min_num_words_sent,  # for batch reader
       max_grad_norm=flags.max_grad_norm,
+      decay_step=flags.decay_step,
+      decay_rate=flags.decay_rate,
       extract_topk=flags.extract_topk,  # for decode mode
       trg_weight_norm=flags.trg_weight_norm)
   return hps
@@ -313,8 +316,7 @@ class SummaRuNNer(object):
     # Call the CudnnGRU
     sentence_vecs_t = tf.transpose(sentence_repr, [1, 0, 2])
     sent_rnn_output, _ = enc_model(
-        input_data=sentence_vecs_t,
-        input_h=init_state,
+        input_data=sentence_vecs_t, input_h=init_state,
         params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
 
     # Masking the paddings
@@ -378,7 +380,10 @@ class SummaRuNNer(object):
           name="extract_XE_loss")
 
       # loss = tf.reduce_mean(xe_loss * loss_mask)
-      batch_loss = tf.div(tf.reduce_sum(xe_loss * self._target_weights * loss_mask, 1),  tf.to_float(self._input_doc_lens))
+      batch_loss = tf.div(
+          tf.reduce_sum(xe_loss * self._target_weights * loss_mask, 1),
+          tf.to_float(self._input_doc_lens))
+      # batch_loss = tf.reduce_mean(xe_loss * self._target_weights * loss_mask, 1)
       loss = tf.reduce_mean(batch_loss)
 
     tf.summary.scalar("loss", loss)
@@ -390,7 +395,8 @@ class SummaRuNNer(object):
 
     self._lr_rate = tf.maximum(
         hps.min_lr,  # minimum learning rate.
-        tf.train.exponential_decay(hps.lr, self.global_step, 30000, 0.98))
+        tf.train.exponential_decay(hps.lr, self.global_step, hps.decay_step,
+                                   hps.decay_rate))
     tf.summary.scalar("learning_rate", self._lr_rate)
 
     tvars = tf.trainable_variables()
