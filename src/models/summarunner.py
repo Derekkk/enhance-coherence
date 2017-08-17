@@ -23,13 +23,13 @@ import lib
 # import memory
 
 # NB: batch_size could be unspecified (None) in decode mode
-HParams = namedtuple("HParams", "mode, min_lr, lr, batch_size,"
+HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "num_sentences, num_words_sent, rel_pos_max_idx,"
-                     "enc_num_hidden, emb_dim, pos_emb_dim, doc_repr_dim,"
-                     "word_conv_k_sizes, word_conv_filter,"
+                     "enc_layers, enc_num_hidden, emb_dim, pos_emb_dim,"
+                     "doc_repr_dim, word_conv_k_sizes, word_conv_filter,"
                      "min_num_input_sents, min_num_words_sent,"
                      "max_grad_norm, decay_step, decay_rate,"
-                     "extract_topk, trg_weight_norm")
+                     "trg_weight_norm")
 
 
 def CreateHParams(flags):
@@ -41,10 +41,12 @@ def CreateHParams(flags):
       mode=flags.mode,  # train, eval, decode
       lr=flags.lr,
       min_lr=flags.min_lr,
+      dropout=flags.dropout,
       batch_size=flags.batch_size,
       num_sentences=flags.num_sentences,  # number of sentences in a document
       num_words_sent=flags.num_words_sent,  # number of words in a sentence
       rel_pos_max_idx=flags.rel_pos_max_idx,  # number of relative positions
+      enc_layers=flags.enc_layers,  # number of layers for sentence-level rnn
       enc_num_hidden=flags.enc_num_hidden,  # for sentence-level rnn
       emb_dim=flags.emb_dim,
       pos_emb_dim=flags.pos_emb_dim,
@@ -56,7 +58,6 @@ def CreateHParams(flags):
       max_grad_norm=flags.max_grad_norm,
       decay_step=flags.decay_step,
       decay_rate=flags.decay_rate,
-      extract_topk=flags.extract_topk,  # for decode mode
       trg_weight_norm=flags.trg_weight_norm)
   return hps
 
@@ -303,7 +304,11 @@ class SummaRuNNer(object):
 
     # Level 2: Add the sentence-level RNN
     enc_model = cudnn_rnn_ops.CudnnGRU(
-        1, hps.enc_num_hidden, sentence_size, direction="bidirectional")
+        hps.enc_layers,
+        hps.enc_num_hidden,
+        sentence_size,
+        direction="bidirectional",
+        dropout=hps.dropout)
     # Compute the total size of RNN params (Tensor)
     params_size_ts = enc_model.params_size()
     params = tf.Variable(
@@ -415,7 +420,7 @@ class SummaRuNNer(object):
 
   def run_train_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _) = batch
+     target_weights, _, _) = batch
 
     to_return = [self._train_op, self._summaries, self._loss, self.global_step]
     results = sess.run(
@@ -432,7 +437,7 @@ class SummaRuNNer(object):
 
   def run_eval_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _) = batch
+     target_weights, _, _) = batch
 
     to_return = [self._loss, self.global_step]
     results = sess.run(
@@ -459,7 +464,7 @@ class SummaRuNNer(object):
     tf.logging.info("\tValid step %d: avg_loss %f" % (step, valid_loss))
 
   def get_extract_probs(self, sess, batch):
-    enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _ = batch
+    enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _, _ = batch
 
     to_return = self._extract_probs
     results = sess.run(

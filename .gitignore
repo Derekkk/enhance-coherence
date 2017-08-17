@@ -3,4 +3,5 @@
 src/data
 src/checkpoints
 src/log
-
+src/out
+etc/NeuralSum

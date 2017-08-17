@@ -19,12 +19,13 @@ import sys
 import time
 import numpy as np
 import tensorflow as tf
-from batch_reader import sentence_sep
 
 FLAGS = tf.app.flags.FLAGS
 
-DECODE_LOOP_DELAY_SECS = 1
 DECODE_IO_FLUSH_INTERVAL = 30
+sentence_sep = " </s> "
+hyp_tag = "<hypothesis> "
+ref_tag = " <reference> "
 
 
 def arg_topk(values, k):
@@ -314,38 +315,22 @@ class BSDecoder(object):
 class SummaRuNNerDecoder(object):
   """Beam search decoder."""
 
-  def __init__(self, model, batch_reader, hps):
+  def __init__(self, model, hps):
     """Beam search decoding.
 
     Args:
       model: The seq2seq attentional model.
-      batch_reader: The batch data reader.
       hps: Hyperparamters.
     """
     self._model = model
     self._model.build_graph()
-    self._batch_reader = batch_reader
     self._hps = hps
 
-    self._saver = tf.train.Saver()
-    self._decode_io = DecodeIO(FLAGS.decode_dir)
-
-  def DecodeLoop(self):
+  def Decode(self, batch_reader, extract_topk):
     """Decoding loop for long running process."""
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-    filenames = self._Decode(self._saver, sess)
-    return filenames
+    saver = tf.train.Saver()
 
-  def _Decode(self, saver, sess):
-    """Restore a checkpoint and decode it.
-
-    Args:
-      saver: Tensorflow checkpoint saver.
-      sess: Tensorflow session.
-    Returns:
-      ref_fn: path of reference file.
-      dec_fn: path of decode file.
-    """
     # Restore the saved checkpoint model
     ckpt_state = tf.train.get_checkpoint_state(FLAGS.ckpt_root)
     if not (ckpt_state and ckpt_state.model_checkpoint_path):
@@ -361,153 +346,48 @@ class SummaRuNNerDecoder(object):
     # Name output files by number of train steps and time
     model = self._model
     hps = self._hps
-    step = model.get_global_step(sess)
-    ref_fn, dec_fn = self._decode_io.ResetFiles(step)
 
-    for next_batch in self._batch_reader:
-      origin_inputs, origin_outputs = next_batch[-2:]
-      doc_lens = next_batch[3]
+    result_list = []
+    # Run decoding for data samples
+    for next_batch in batch_reader:
+      document_sents = next_batch.origin_inputs
+      summary_sents = next_batch.origin_outputs
+      doc_lens = next_batch.enc_doc_lens
 
       probs = model.get_extract_probs(sess, next_batch)
 
       for i in xrange(hps.batch_size):
-        probs_i = probs[i, :].tolist()
         doc_len = doc_lens[i]
-        self._DecodeBatch(origin_inputs[i], origin_outputs[i], probs_i, doc_len,
-                          hps.extract_topk)
+        probs_i = probs[i, :].tolist()[:doc_len]
+        decoded_str = self._DecodeTopK(document_sents[i], probs_i, extract_topk)
+        summary_str = sentence_sep.join(summary_sents[i])
 
-    tf.logging.info(
-        "Finished decoding into following files:\nreference=%s\ndecode=%s",
-        ref_fn, dec_fn)
-    return ref_fn, dec_fn
+        result_list.append(hyp_tag + decoded_str + ref_tag + summary_str + "\n")
 
-  def _DecodeBatch(self, article, abstract, probs, doc_len, top_k=3):
+    decode_dir = FLAGS.decode_dir
+    if not os.path.exists(decode_dir):
+      os.makedirs(decode_dir)
+    step = model.get_global_step(sess)
+    timestep = int(time.time())
+    output_fn = os.path.join(decode_dir, 'iter_%d_%d' % (step, timestep))
+
+    with open(output_fn, 'w') as f:
+      f.writelines(result_list)
+
+    return output_fn
+
+  def _DecodeTopK(self, document, probs, top_k=3):
     """Convert id to words and writing results.
 
     Args:
-      article: The original article string.
-      abstract: The human (correct) abstract string.
-      topk_ids: The ids of extracted sentences.
+      document: a list of original document sentences.
+      probs: probabilities of extraction.
+      top_k: number of sentence extracted.
     """
-    probs = probs[:doc_len]
     topk_ids = arg_topk(probs, top_k)
-    sentences = [article[i] for i in topk_ids]
-    decoded_output = sentence_sep.join(sentences)
-    topk_probs = [probs[i] for i in topk_ids]
-    decoded_output += "<probs> " + " ".join([str(p) for p in topk_probs])
+    extracted_sents = [document[i] for i in topk_ids]
+    decoded_output = sentence_sep.join(extracted_sents)
+    # topk_probs = [probs[i] for i in topk_ids]
+    # decoded_output += "<probs> " + " ".join([str(p) for p in topk_probs])
 
-    tf.logging.info('article:  %s', article)
-    tf.logging.info('abstract: %s', abstract)
-    tf.logging.info('decoded:  %s', decoded_output)
-    self._decode_io.Write(abstract, decoded_output.strip())
-
-
-class BSDemoDecoder(object):
-  #TODO: need to be updated!
-  """Beam search decoder for demo."""
-
-  def __init__(self, model, hps, vocab):
-    """Beam search decoding.
-
-    Args:
-      model: The seq2seq attentional model.
-      batch_reader: The batch data reader.
-      hps: Hyperparamters.
-      vocab: Vocabulary
-    """
-    self._model = model
-    self._model.build_graph()
-    # self._batch_reader = batch_reader
-    self._hps = hps
-    self._vocab = vocab
-    self._saver = tf.train.Saver()
-    # self._decode_io = DecodeIO(FLAGS.decode_dir)
-
-  def DecodeLoop(self):
-    """Decoding loop for long running process."""
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-    self._Decode(self._saver, sess)
-
-  def _Decode(self, saver, sess):
-    """Restore a checkpoint and decode it.
-
-    Args:
-      saver: Tensorflow checkpoint saver.
-      sess: Tensorflow session.
-    Returns:
-      If success, returns true, otherwise, false.
-    """
-    ckpt_state = tf.train.get_checkpoint_state(FLAGS.ckpt_root)
-    if not (ckpt_state and ckpt_state.model_checkpoint_path):
-      tf.logging.info('No model to decode yet at %s', FLAGS.ckpt_root)
-      return False
-
-    tf.logging.info('checkpoint path %s', ckpt_state.model_checkpoint_path)
-    ckpt_path = os.path.join(FLAGS.ckpt_root,
-                             os.path.basename(ckpt_state.model_checkpoint_path))
-    tf.logging.info('renamed checkpoint path %s', ckpt_path)
-    saver.restore(sess, ckpt_path)
-
-    self._start_id = self._vocab.WordToId(data.SENTENCE_START)
-    self._end_id = self._vocab.WordToId(data.SENTENCE_END)
-    self._pad_id = self._vocab.WordToId(data.PAD_TOKEN)
-
-    bs = BeamSearch(self._model, self._hps.beam_size, self._start_id,
-                    self._end_id, self._hps.dec_timesteps)
-
-    # for next_batch in self._batch_reader:
-    article_str = raw_input("Article: ")
-    while article_str != "EOF":
-      if len(article_str) == 0:
-        article_str = raw_input("Article: ")
-        continue
-
-      try:
-        article, article_len = self._Preprocess(article_str)
-      except:
-        sys.stdout.write('Article could not be longer than %d words.\n' %
-                         self._hps.enc_timesteps)
-        article_str = raw_input("Article: ")
-        continue
-
-      # for i in xrange(self._hps.batch_size):
-      article_cp = article.copy()
-      article_len_cp = article_len.copy()
-      best_beam = bs.BeamSearch(sess, article_cp, article_len_cp)[0]
-      decode_output = [int(t) for t in best_beam.tokens[1:]]
-      self._DecodeBatch(decode_output)
-
-      article_str = raw_input("Article: ")
-
-    sys.stdout.write('Terminated.\n')
-
-  def _Preprocess(self, article_str):
-    article_chars = [w.encode("utf-8") for w in article_str.decode("utf-8")]
-    spaced_article_str = " ".join(article_chars)
-    article_ids = data.GetWordIds(spaced_article_str, self._vocab)
-    length = len(article_ids)
-
-    while len(article_ids) < self._hps.enc_timesteps:
-      article_ids.append(self._pad_id)
-
-    article = np.zeros((1, self._hps.enc_timesteps), dtype=np.int32)
-    article[:] = article_ids
-    article_len = np.zeros((1), dtype=np.int32)
-    article_len[0] = length
-
-    return article, article_len
-
-  def _DecodeBatch(self, output_ids):
-    """Convert id to words and writing results.
-
-    Args:
-      article: The original article string.
-      abstract: The human (correct) abstract string.
-      output_ids: The abstract word ids output by machine.
-    """
-    decoded_output = ''.join(data.Ids2Words(output_ids, self._vocab))
-    end_p = decoded_output.find(data.SENTENCE_END, 0)
-    if end_p != -1:
-      decoded_output = decoded_output[:end_p]
-    sys.stdout.write('Abstract:  %s\n' % decoded_output)
-    # self._decode_io.Write(abstract, decoded_output.strip())
+    return decoded_output

@@ -4,8 +4,8 @@ import numpy as np
 import tensorflow as tf
 from collections import namedtuple
 
-from utils import batch_reader, vocab
-# from utils.decode import BSDecoder, BSDemoDecoder, SummaRuNNerDecoder
+from utils import batch_reader, vocab, evaluate
+from utils.decode import SummaRuNNerDecoder
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string("model", "", "The name of model runned.")
@@ -23,12 +23,11 @@ tf.app.flags.DEFINE_integer("output_vsize", 0,
 #                            "tf.Example feature key for abstract.")
 tf.app.flags.DEFINE_string("ckpt_root", "", "Directory for checkpoint root.")
 tf.app.flags.DEFINE_string("summary_dir", "", "Directory for summary files.")
-# tf.app.flags.DEFINE_string("eval_dir", "", "Directory for eval.")
 tf.app.flags.DEFINE_string("mode", "train", "train/decode mode")
 # tf.app.flags.DEFINE_integer("enc_timesteps", 83, "Max number of encoder steps.")
 # tf.app.flags.DEFINE_integer("dec_timesteps", 18, "Max number of decoder steps.")
 tf.app.flags.DEFINE_integer("batch_size", 32, "Size of minibatch.")
-# tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
+tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
 # ----------- Train mode related flags ------------------
 tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
@@ -38,10 +37,11 @@ tf.app.flags.DEFINE_integer("decay_step", 30000, "Exponential decay step.")
 tf.app.flags.DEFINE_float("decay_rate", 0.1, "Exponential decay rate.")
 tf.app.flags.DEFINE_integer("max_run_steps", 1000000,
                             "Maximum number of run steps.")
+tf.app.flags.DEFINE_float("dropout", 0.0, "Dropout rate.")
 tf.app.flags.DEFINE_string("valid_path", "",
                            "Path expression to validation set.")
 tf.app.flags.DEFINE_integer("valid_freq", 1000, "How often to run eval.")
-tf.app.flags.DEFINE_integer("num_valid_batch", 20,
+tf.app.flags.DEFINE_integer("num_valid_batch", 50,
                             "Number valid batches in each _Valid step.")
 tf.app.flags.DEFINE_integer("checkpoint_secs", 1200, "How often to checkpoint.")
 tf.app.flags.DEFINE_integer("max_to_keep", None,
@@ -60,6 +60,8 @@ tf.app.flags.DEFINE_bool("truncate_input", False,
 tf.app.flags.DEFINE_integer("beam_size", 10,
                             "beam size for beam search decoding.")
 tf.app.flags.DEFINE_string("decode_dir", "", "Directory for decode summaries.")
+tf.app.flags.DEFINE_integer("extract_topk", 3,
+                            "Number of sentence extracted in decode mode.")
 # ----------- summarunner related flags ----------------
 tf.app.flags.DEFINE_integer("emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("num_gpus", 1, "Number of gpus used.")
@@ -83,8 +85,6 @@ tf.app.flags.DEFINE_integer("min_num_input_sents", 0,
                             "Minimum number of sentences in input docuement.")
 tf.app.flags.DEFINE_integer("min_num_words_sent", 0,
                             "Ignore sentences shorter than this threshold.")
-tf.app.flags.DEFINE_integer("extract_topk", 3,
-                            "Number of sentence extracted in decode mode.")
 tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
                             "Normalize the extraction target weights. "
                             "No normalization if it is not positive.")
@@ -194,9 +194,9 @@ def main():
     _Train(model, batcher, valid_batcher, TrainLoop)  # start training
   elif FLAGS.mode == "decode":
     model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
-    decoder = SummaRuNNerDecoder(model, batcher, hps)
-    ref_fn, dec_fn = decoder.DecodeLoop()
-    # evaluate_files(ref_fn, dec_fn)
+    decoder = SummaRuNNerDecoder(model, hps)
+    output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
+    evaluate.eval_rouge(output_fn)
   else:
     raise ValueError("Invalid mode %s. Try train/decode instead." % FLAGS.mode)
 

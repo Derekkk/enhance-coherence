@@ -28,15 +28,18 @@ from collections import namedtuple
 ExtractiveSample = namedtuple('ExtractiveSample',
                               'enc_input, enc_doc_len, enc_sent_len,'
                               'sent_rel_pos, extract_target, target_weight,'
-                              'origin_input')
+                              'origin_input origin_output')
 
 ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'enc_batch, enc_doc_lens, enc_sent_lens,'
                              'sent_rel_pos, extract_targets, target_weights,'
-                             'origin_inputs')
+                             'origin_inputs origin_outputs')
+
+# DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
+# DocSummaryCount = namedtuple('DocSummary', 'document summary extract_ids count')
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
-BUCKET_NUM_BATCH = 20  # Number of batches per bucketing iteration fetches
+BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
 GET_TIMEOUT = 60
 
 
@@ -194,8 +197,13 @@ class ExtractiveBatcher(object):
       else:
         np_weights = np.ones([hps.num_sentences], dtype=np.float32)
 
+      try:
+        summary = data_sample.summary
+      except:
+        summary = [""]
       sample = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
-                                np_rel_pos, np_target, np_weights, document)
+                                np_rel_pos, np_target, np_weights, document,
+                                summary)
       self._sample_queue.put(sample)
 
   def _DataGenerator(self, path, num_epochs=None):
@@ -242,18 +250,20 @@ class ExtractiveBatcher(object):
     """
     hps = self._hps
     field_lists = [[], [], [], [], [], []]
-    origin_inputs = []
+    origin_inputs, origin_outputs = [], []
 
     for ex in batch:
       for i in range(6):
         field_lists[i].append(ex[i])
-      origin_inputs.append(ex[-1])
+      origin_inputs.append(ex.origin_input)
+      origin_outputs.append(ex.origin_output)
 
     stacked_fields = [np.stack(field, axis=0) for field in field_lists]
 
     return ExtractiveBatch(stacked_fields[0], stacked_fields[1],
                            stacked_fields[2], stacked_fields[3],
-                           stacked_fields[4], stacked_fields[5], origin_inputs)
+                           stacked_fields[4], stacked_fields[5], origin_inputs,
+                           origin_outputs)
 
   def _WatchThreads(self):
     """Watch the daemon input threads and restart if dead."""
