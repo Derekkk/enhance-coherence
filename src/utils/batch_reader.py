@@ -36,7 +36,7 @@ ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'origin_inputs')
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
-BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
+BUCKET_NUM_BATCH = 20  # Number of batches per bucketing iteration fetches
 GET_TIMEOUT = 60
 
 

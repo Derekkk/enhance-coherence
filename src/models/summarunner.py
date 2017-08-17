@@ -165,7 +165,9 @@ class SummaRuNNer(object):
         self._add_embeddings()
 
       # Encoder
-      with tf.variable_scope("encoder"), tf.device(self._device_0):
+      with tf.variable_scope("encoder",
+          initializer=tf.random_uniform_initializer(-0.1, 0.1)), \
+          tf.device(self._device_0):
         # Hierarchical encoding of input document
         sentence_vecs = self._add_encoder(
             self._inputs, self._input_sent_lens, self._input_doc_lens
