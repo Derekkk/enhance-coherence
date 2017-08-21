@@ -23,9 +23,9 @@ import tensorflow as tf
 FLAGS = tf.app.flags.FLAGS
 
 DECODE_IO_FLUSH_INTERVAL = 30
-sentence_sep = " </s> "
-hyp_tag = "<hypothesis> "
-ref_tag = " <reference> "
+sentence_sep = "</s>"
+sys_tag = "<system>"
+ref_tag = "<reference>"
 
 
 def arg_topk(values, k):
@@ -362,7 +362,8 @@ class SummaRuNNerDecoder(object):
         decoded_str = self._DecodeTopK(document_sents[i], probs_i, extract_topk)
         summary_str = sentence_sep.join(summary_sents[i])
 
-        result_list.append(hyp_tag + decoded_str + ref_tag + summary_str + "\n")
+        result_list.append(" ".join(
+            [sys_tag, decoded_str, ref_tag, summary_str]) + "\n")
 
     decode_dir = FLAGS.decode_dir
     if not os.path.exists(decode_dir):
@@ -373,6 +374,7 @@ class SummaRuNNerDecoder(object):
 
     with open(output_fn, 'w') as f:
       f.writelines(result_list)
+    tf.logging.info('Outputs written to %s', output_fn)
 
     return output_fn
 
@@ -387,7 +389,5 @@ class SummaRuNNerDecoder(object):
     topk_ids = arg_topk(probs, top_k)
     extracted_sents = [document[i] for i in topk_ids]
     decoded_output = sentence_sep.join(extracted_sents)
-    # topk_probs = [probs[i] for i in topk_ids]
-    # decoded_output += "<probs> " + " ".join([str(p) for p in topk_probs])
 
     return decoded_output

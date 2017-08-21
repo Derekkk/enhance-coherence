@@ -35,8 +35,7 @@ ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'sent_rel_pos, extract_targets, target_weights,'
                              'origin_inputs origin_outputs')
 
-# DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
-# DocSummaryCount = namedtuple('DocSummary', 'document summary extract_ids count')
+# Note(jimmycode): refer to run.py for definition of DocSummary, DocSummaryCount
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
 BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches

@@ -1,44 +1,31 @@
-""" Evaluate performance of Lead-3. """
+""" Evaluate performance. """
 import pdb
 import argparse
 from nltk.tokenize import sent_tokenize
 import time
 
 # Import pythonrouge package
-from pythonrouge.pythonrouge import Pythonrouge
-ROUGE_path = "/qydata/ywubw/download/RELEASE-1.5.5/ROUGE-1.5.5.pl"
-data_path = "/qydata/ywubw/download/RELEASE-1.5.5/data"
+from pythonrouge import PythonROUGE
+ROUGE_dir = "/qydata/ywubw/download/RELEASE-1.5.5"
 
 # Input data format
 sentence_sep = "</s>"
-input_tag = "<hypothesis>"
-output_tag = "<reference>"
-
-
-def pyrouge_eval(summary, reference, rouge):
-  setting_file = rouge.setting(
-      files=False, summary=summary, reference=reference)
-  results = rouge.eval_rouge(
-      setting_file,
-      f_measure_only=False,
-      ROUGE_path=ROUGE_path,
-      data_path=data_path)
-
-  print results
+sys_tag = "<system>"
+ref_tag = "<reference>"
 
 
 def eval_rouge(in_path):
-  in_file = open(in_path, "r")
   print "Using pythonrouge package for evaluation."
-  rouge = Pythonrouge(
+  rouge = PythonROUGE(
+      ROUGE_dir,
       n_gram=2,
       ROUGE_SU4=False,
       ROUGE_L=True,
       stemming=True,
       stopwords=False,
-      word_level=False,
       length_limit=False,
       length=75,
+      word_level=False,
       use_cf=True,
       cf=95,
       ROUGE_W=False,
@@ -50,27 +37,27 @@ def eval_rouge(in_path):
       p=0.5)
 
   # pdb.set_trace()
-  input_start = len(input_tag)
+  sys_start = len(sys_tag)
   num_samples = 0
   summary, reference = [], []
 
-  for l in in_file.readlines():
-    input_end = l.find(output_tag)
-    output_start = input_end + len(output_tag)
-    input_str = l[input_start:input_end].strip()
-    output_str = l[output_start:].strip()
+  with open(in_path, "r") as in_file:
+    for l in in_file.readlines():
+      sys_end = l.find(ref_tag)
+      sys_str = l[sys_start:sys_end].strip()
+      ref_start = sys_end + len(ref_tag)
+      ref_str = l[ref_start:].strip()
 
-    input_sent_list = input_str.split(sentence_sep)
-    output_sent_list = output_str.split(sentence_sep)
+      sys_sent_list = sys_str.split(sentence_sep)
+      ref_sent_list = ref_str.split(sentence_sep)
 
-    summary.append(input_sent_list)
-    reference.append([output_sent_list])
-    num_samples += 1
+      summary.append([sys_sent_list])
+      reference.append([ref_sent_list])
+      num_samples += 1
 
   start_time = time.time()
   # Evaluate ROUGE using pythonrouge package
-  pyrouge_eval(summary, reference, rouge)
-
+  print rouge.evaluate(summary, reference)
   total_time = time.time() - start_time
   time_per_eval = total_time / num_samples
   print "Takes %f seconds to evaluate %d samples, avg %fs." % (total_time,
@@ -79,7 +66,7 @@ def eval_rouge(in_path):
 
 
 if __name__ == "__main__":
-  parser = argparse.ArgumentParser(description='Evaluate ROUGE of Lead-3.')
+  parser = argparse.ArgumentParser(description='Evaluate ROUGE.')
   parser.add_argument('in_path', type=str, help='Path of input data file.')
   args = parser.parse_args()
 

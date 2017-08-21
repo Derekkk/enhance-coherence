@@ -17,15 +17,9 @@ tf.app.flags.DEFINE_integer("input_vsize", 0,
                             "Number of words in input vocabulary.")
 tf.app.flags.DEFINE_integer("output_vsize", 0,
                             "Number of words in output vocabulary.")
-# tf.app.flags.DEFINE_string("article_key", "<input>",
-#                            "tf.Example feature key for article.")
-# tf.app.flags.DEFINE_string("abstract_key", "<output>",
-#                            "tf.Example feature key for abstract.")
 tf.app.flags.DEFINE_string("ckpt_root", "", "Directory for checkpoint root.")
 tf.app.flags.DEFINE_string("summary_dir", "", "Directory for summary files.")
 tf.app.flags.DEFINE_string("mode", "train", "train/decode mode")
-# tf.app.flags.DEFINE_integer("enc_timesteps", 83, "Max number of encoder steps.")
-# tf.app.flags.DEFINE_integer("dec_timesteps", 18, "Max number of decoder steps.")
 tf.app.flags.DEFINE_integer("batch_size", 32, "Size of minibatch.")
 tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
 # ----------- Train mode related flags ------------------
@@ -90,7 +84,11 @@ tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
                             "No normalization if it is not positive.")
 
 DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
-DocSummaryCount = namedtuple('DocSummary', 'document summary extract_ids count')
+
+# DocSummary = namedtuple('DocSummary',
+#                         'url document summary extract_ids rouge_2')
+# DocSummaryCount = namedtuple('DocSummaryCount',
+#                              'url document extract_ids count')
 
 
 def _Train(model, data_batcher, valid_batcher, train_loop):
@@ -164,6 +162,7 @@ def main():
     num_epochs = 1  # only go through test set once
     shuffle_batches = False  # do not shuffle the batches
     hps._replace(batch_size=1)  # ensure all examples are used
+    batch_reader.BUCKET_NUM_BATCH = 1  # ensure all examples are used
 
   # Create data reader
   if model_type == "summarunner":
