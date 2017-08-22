@@ -17,7 +17,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.util import nest
-# from memory import MemoryWrapper
+from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 
 
 def compute_avg(values, summary_writer, tag_name, step):
@@ -164,6 +164,65 @@ def linear(args, output_size, bias, bias_start=0.0, scope=None):
           dtype=dtype,
           initializer=tf.constant_initializer(bias_start, dtype=dtype))
   return tf.nn.bias_add(res, biases)
+
+
+def create_cudnn_rnn(input_data,
+                     rnn_mode,
+                     num_layers,
+                     num_units,
+                     input_size,
+                     variable_name,
+                     direction="unidirectional",
+                     time_major=False,
+                     dropout=0.0):
+
+  if rnn_mode == "lstm":
+    model = cudnn_rnn_ops.CudnnLSTM(
+        num_layers, num_units, input_size, direction=direction, dropout=dropout)
+  elif rnn_mode == "gru":
+    model = cudnn_rnn_ops.CudnnGRU(
+        num_layers, num_units, input_size, direction=direction, dropout=dropout)
+  else:
+    raise ValueError("Invalid rnn_mode: %s" % rnn_mode)
+
+  # Compute the total size of RNN params (Tensor)
+  params_size_ts = model.params_size()
+  params = tf.Variable(
+      tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
+      validate_shape=False,
+      name=variable_name)
+
+  if not time_major:
+    batch_size_ts = tf.shape(input_data)[0]  # batch size Tensor
+    input_data = tf.transpose(input_data, [1, 0, 2])
+  else:
+    batch_size_ts = tf.shape(input_data)[1]  # batch size Tensor
+  # NB: input_data should has shape [batch_size, num_timestep, d]
+
+  if direction == "unidirectional":
+    dir_count = 1
+  elif direction == "bidirectional":
+    dir_count = 2
+  else:
+    raise ValueError("Invalid direction: %s" % direction)
+
+  init_h = tf.zeros(
+      tf.stack([num_layers * dir_count, batch_size_ts, num_units]))
+  has_input_c = (rnn_mode == "lstm")
+
+  # Call the CudnnRNN
+  if has_input_c:
+    init_c = tf.zeros(
+        tf.stack([num_layers * dir_count, batch_size_ts, num_units]))
+    output, output_h, output_c = model(
+        input_data=input_data, input_h=init_h, input_c=init_c, params=params)
+  else:
+    output, output_h = model(
+        input_data=input_data, input_h=init_h, params=params)
+
+  # output: [num_timestep, batch_size, num_units*dir_count]
+  # output_h/c: [batch_size, num_units*dir_count]
+  return output, output_h
 
 
 def embed_loop_func(embedding, update_embedding=True):

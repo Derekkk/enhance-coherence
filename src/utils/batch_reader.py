@@ -33,7 +33,7 @@ ExtractiveSample = namedtuple('ExtractiveSample',
 ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'enc_batch, enc_doc_lens, enc_sent_lens,'
                              'sent_rel_pos, extract_targets, target_weights,'
-                             'origin_inputs origin_outputs')
+                             'others')  # others=(origin_inputs,origin_outputs)
 
 # Note(jimmycode): refer to run.py for definition of DocSummary, DocSummaryCount
 
@@ -261,8 +261,8 @@ class ExtractiveBatcher(object):
 
     return ExtractiveBatch(stacked_fields[0], stacked_fields[1],
                            stacked_fields[2], stacked_fields[3],
-                           stacked_fields[4], stacked_fields[5], origin_inputs,
-                           origin_outputs)
+                           stacked_fields[4], stacked_fields[5],\
+                           (origin_inputs, origin_outputs))
 
   def _WatchThreads(self):
     """Watch the daemon input threads and restart if dead."""

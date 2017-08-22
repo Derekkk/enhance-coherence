@@ -149,7 +149,6 @@ def main():
 
   # Build vocabs
   input_vocab = vocab.Vocab(FLAGS.input_vocab, FLAGS.input_vsize)
-  output_vocab = None
 
   # Create model hyper-parameters
   hps = CreateHParams(FLAGS)
@@ -189,10 +188,10 @@ def main():
     raise NotImplementedError()
 
   if FLAGS.mode == "train":
-    model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
+    model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
     _Train(model, batcher, valid_batcher, TrainLoop)  # start training
   elif FLAGS.mode == "decode":
-    model = Model(hps, input_vocab, output_vocab, num_gpus=FLAGS.num_gpus)
+    model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
     decoder = SummaRuNNerDecoder(model, hps)
     output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
     evaluate.eval_rouge(output_fn)

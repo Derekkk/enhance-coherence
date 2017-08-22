@@ -350,8 +350,8 @@ class SummaRuNNerDecoder(object):
     result_list = []
     # Run decoding for data samples
     for next_batch in batch_reader:
-      document_sents = next_batch.origin_inputs
-      summary_sents = next_batch.origin_outputs
+      document_sents = next_batch.others[0]
+      summary_sents = next_batch.others[1]
       doc_lens = next_batch.enc_doc_lens
 
       probs = model.get_extract_probs(sess, next_batch)

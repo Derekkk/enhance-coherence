@@ -17,10 +17,7 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
-from tensorflow.contrib.rnn import GRUCell
-
 import lib
-# import memory
 
 # NB: batch_size could be unspecified (None) in decode mode
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
@@ -98,7 +95,7 @@ class SummaRuNNer(object):
   This is the extractive version of SummaRuNNer.
   """
 
-  def __init__(self, hps, input_vocab, output_vocab=None, num_gpus=0):
+  def __init__(self, hps, input_vocab, num_gpus=0):
     if hps.mode not in ["train", "decode"]:
       raise ValueError("Only train and decode mode are supported.")
 
@@ -397,7 +394,7 @@ class SummaRuNNer(object):
     self._loss = loss
 
   def _add_train_op(self):
-    """Sets self._train_op, op to run for training."""
+    """Sets self._train_op for training."""
     hps = self._hps
 
     self._lr_rate = tf.maximum(
@@ -420,7 +417,7 @@ class SummaRuNNer(object):
 
   def run_train_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _, _) = batch
+     target_weights, _) = batch
 
     to_return = [self._train_op, self._summaries, self._loss, self.global_step]
     results = sess.run(
@@ -437,11 +434,10 @@ class SummaRuNNer(object):
 
   def run_eval_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _, _) = batch
+     target_weights, _) = batch
 
-    to_return = [self._loss, self.global_step]
-    results = sess.run(
-        to_return,
+    loss = sess.run(
+        self._loss,
         feed_dict={
             self._inputs: enc_batch,
             self._input_sent_lens: enc_sent_lens,
@@ -450,21 +446,22 @@ class SummaRuNNer(object):
             self._extract_targets: extract_targets,
             self._target_weights: target_weights
         })
-    return results
+    return loss
 
   def run_valid_steps(self, sess, data_batcher, num_valid_batch,
                       summary_writer):
     losses = []
     for _ in xrange(num_valid_batch):
       next_batch = data_batcher.next()
-      loss, step = self.run_eval_step(sess, next_batch)
+      loss = self.run_eval_step(sess, next_batch)
       losses.append(loss)
 
+    step = self.get_global_step(sess)
     valid_loss = lib.compute_avg(losses, summary_writer, "valid_loss", step)
     tf.logging.info("\tValid step %d: avg_loss %f" % (step, valid_loss))
 
   def get_extract_probs(self, sess, batch):
-    enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _, _ = batch
+    enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _ = batch
 
     to_return = self._extract_probs
     results = sess.run(
