@@ -1,23 +1,23 @@
 export CUDA_VISIBLE_DEVICES=0
 python run.py \
   --model=summarunner \
-  --data_path=data/cnn/training_shuf.pkl \
-  --input_vocab=data/cnn/training.vocab \
+  --data_path=data/cnndaily/training_shuf.pkl \
+  --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/ex14 \
-  --summary_dir=log/ex14 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex02 \
+  --summary_dir=log/cnndaily/summar/ex02 \
   --mode=train \
-  --lr 0.7 \
-  --min_lr 0.00001 \
+  --lr 0.5 \
+  --min_lr 0.0001 \
   --decay_step 30000 \
-  --decay_rate 0.5 \
-  --dropout 0.0 \
+  --decay_rate 0.8 \
+  --dropout 0.2 \
   --batch_size 64 \
-  --max_run_steps 50000 \
-  --valid_path=data/cnn/validation_shuf.pkl \
-  --valid_freq 5000 \
-  --checkpoint_secs 1200 \
+  --max_run_steps 200000 \
   --display_freq 100 \
+  --valid_path=data/cnndaily/validation_shuf.pkl \
+  --valid_freq 500 \
+  --checkpoint_secs 1200 \
   --use_bucketing False \
   --truncate_input True \
   --emb_dim 128 \
@@ -28,6 +28,6 @@ python run.py \
   --enc_layers 1 \
   --pos_emb_dim 64 \
   --doc_repr_dim 512 \
-  --word_conv_k_sizes '1,3,5,7' \
+  --word_conv_k_sizes '3,5,7' \
   --word_conv_filter 128 \
   --min_num_input_sents 3 \

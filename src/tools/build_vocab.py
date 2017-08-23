@@ -4,8 +4,10 @@ import pdb
 import cPickle as pkl
 from collections import namedtuple
 
-DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
-DocSummaryCount = namedtuple('DocSummary', 'document summary extract_ids count')
+DocSummary = namedtuple('DocSummary',
+                        'url document summary extract_ids rouge_2')
+
+# DocSummaryCount = namedtuple('DocSummary', 'document summary extract_ids count')
 
 
 def update_vocab(vocab, word):

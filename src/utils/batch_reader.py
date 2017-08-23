@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
 """Batch reader to seq2seq attention model, with bucketing support."""
 
 import Queue
-from random import shuffle, sample, randint
+import random
+from random import shuffle, randint
 from threading import Thread
 import time
 import numpy as np
@@ -30,17 +30,24 @@ ExtractiveSample = namedtuple('ExtractiveSample',
                               'enc_input, enc_doc_len, enc_sent_len,'
                               'sent_rel_pos, extract_target, target_weight,'
                               'origin_input origin_output')
-
 ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'enc_batch, enc_doc_lens, enc_sent_lens,'
                              'sent_rel_pos, extract_targets, target_weights,'
                              'others')  # others=(origin_inputs,origin_outputs)
 
+SentencePair = namedtuple('SentencePair',
+                          'sent_A, sent_B, length_A, length_B, label')
+SentencePairBatch = namedtuple('SentencePairBatch',
+                               'sents_A, sents_B, lengths_A, lengths_B,'
+                               'labels')
+
 # Note(jimmycode): refer to run.py for definition of DocSummary, DocSummaryCount
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
 BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
-GET_TIMEOUT = 120
+GET_TIMEOUT = 240
+SAMPLE_PATIENCE = 10  # Maximum number of sample failures, to avoid infinite loop
+
 
 def neg_samp_pairs(sequence, size=0):
   if len(sequence) < 2:
@@ -53,14 +60,23 @@ def neg_samp_pairs(sequence, size=0):
 
   neg_samples_set = set()
   seq_end_idx = len(sequence) - 1
-  while len(neg_samples_set) < size:
+  fail_count = 0  # number of sample failures
+  while len(neg_samples_set) < size and fail_count < SAMPLE_PATIENCE:
     id_1 = randint(0, seq_end_idx)
     id_2 = randint(0, seq_end_idx)
+
     if id_1 != id_2 and id_1 + 1 != id_2:
-      neg_samples_set.add((id_1, id_2))
+      pair = (id_1, id_2)
+      if pair not in neg_samples_set:
+        neg_samples_set.add(pair)
+      else:
+        fail_count += 1
+    else:
+      fail_count += 1
 
   neg_samples = [(sequence[i], sequence[j]) for i, j in neg_samples_set]
   return neg_samples
+
 
 class ExtractiveBatcher(object):
   """Batch reader for extractive summarization data."""
@@ -220,10 +236,10 @@ class ExtractiveBatcher(object):
         summary = data_sample.summary
       except:
         summary = [""]
-      sample = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
+      element = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
                                 np_rel_pos, np_target, np_weights, document,
                                 summary)
-      self._sample_queue.put(sample)
+      self._sample_queue.put(element)
 
   def _DataGenerator(self, path, num_epochs=None):
     """An (infinite) iterator that outputs data samples."""
@@ -321,9 +337,6 @@ class SentencePairBatcher(ExtractiveBatcher):
     hps = self._hps
     enc_vocab = self._enc_vocab
     enc_pad_id = enc_vocab.pad_id
-    enc_empty_sent = [enc_pad_id] * hps.num_words_sent
-    rel_pos_max_float = float(hps.rel_pos_max_idx - 1)
-
     data_generator = self._DataGenerator(data_path, self._num_epochs)
 
     # pdb.set_trace()
@@ -336,91 +349,55 @@ class SentencePairBatcher(ExtractiveBatcher):
       # Step 1: sample positive/negative pairs
       positive_pairs = []
 
-      # Positive 1 (25%): summary
+      # Positive (50% * 1/3): summary
       summary_length = len(summary)
       for i in range(summary_length - 1):
-        positive_pairs.append((summary[i], summary[i+1]))
+        positive_pairs.append((summary[i], summary[i + 1]))
 
-      # Positive 2 (25%): document
+      # Positive (50% * 2/3): document
       doc_length = len(document)
-      if doc_length > summary_length:
-        sampled_ids = sample(range(doc_length - 1), summary_length)
-        for i in sampled_ids:
-          positive_pairs.append((document[i], document[i+1]))
-        
+      sample_size = min(2 * summary_length, doc_length - 1)
+      sampled_ids = random.sample(range(doc_length - 1), sample_size)
+      for i in sampled_ids:
+        positive_pairs.append((document[i], document[i + 1]))
+
       # Negative (50%)
       if summary_length > 1:
         summary_neg = neg_samp_pairs(summary)
-      document_neg = neg_samp_pairs(document, len(positive_pairs) - len(summary_neg))
+      document_neg = neg_samp_pairs(document,
+                                    len(positive_pairs) - len(summary_neg))
       negative_pairs = summary_neg + document_neg
 
-      # Content as enc_input
-      enc_input = [enc_vocab.GetIds(s) for s in document]
+      # Combine them with labels, 1 for positive, 0 for negative
+      all_pairs = []
+      for p in positive_pairs:
+        all_pairs.append((p[0], p[1], 1))
+      for p in negative_pairs:
+        all_pairs.append((p[0], p[1], 0))
+      shuffle(all_pairs)
 
-      # Filter out too-short input
-      if len(enc_input) < hps.min_num_input_sents:
-        continue
+      # Convert format and add to queue
+      for sent_A_str, sent_B_str, label in all_pairs:
+        sent_A_ids = enc_vocab.GetIds(sent_A_str)
+        sent_B_ids = enc_vocab.GetIds(sent_B_str)
+        length_A = len(sent_A_ids)
+        length_B = len(sent_B_ids)
 
-      if self._truncate_input:
-        enc_input = [
-            s[:hps.num_words_sent] for s in enc_input[:hps.num_sentences]
-        ]
-      else:
-        if len(enc_input) > hps.num_sentences:
-          continue  # throw away too long inputs
+        if length_A >= hps.max_sent_len:
+          sent_A_ids = sent_A_ids[:hps.max_sent_len]
+        else:
+          sent_A_ids += [enc_pad_id] * (hps.max_sent_len - length_A)
 
-      # Now enc_input should fit in 2-D matrix [num_sentences, num_words_sent]
-      enc_sent_len = [len(s) for s in enc_input]
-      enc_doc_len = len(enc_input)
+        if length_B >= hps.max_sent_len:
+          sent_B_ids = sent_B_ids[:hps.max_sent_len]
+        else:
+          sent_B_ids += [enc_pad_id] * (hps.max_sent_len - length_B)
 
-      # Pad enc_input if necessary
-      padded_enc_input = [
-          s + [enc_pad_id] * (hps.num_words_sent - l)
-          for s, l in zip(enc_input, enc_sent_len)
-      ]
-      padded_enc_input += [enc_empty_sent] * (hps.num_sentences - enc_doc_len)
-      np_enc_input = np.array(padded_enc_input, dtype=np.int32)
+        np_sent_A = np.array(sent_A_ids, dtype=np.int32)
+        np_sent_B = np.array(sent_B_ids, dtype=np.int32)
 
-      # Compute the relative position. 0 is reserved for padding.
-      rel_pos_coef = rel_pos_max_float / enc_doc_len
-      sent_rel_pos = [int(i * rel_pos_coef) + 1 for i in range(enc_doc_len)]
-
-      # Pad the input lengths and positions
-      pad_enc_sent_len = enc_sent_len + [0] * (hps.num_sentences - enc_doc_len)
-      pad_rel_pos = sent_rel_pos + [0] * (hps.num_sentences - enc_doc_len)
-      np_enc_sent_len = np.array(pad_enc_sent_len, dtype=np.int32)
-      np_rel_pos = np.array(pad_rel_pos, dtype=np.int32)
-
-      # Skip those with no extractive summaries
-      if len(extract_ids) == 0:
-        continue
-
-      np_target = np.zeros([hps.num_sentences], dtype=np.int32)
-      for i in extract_ids:
-        if i < hps.num_sentences:
-          np_target[i] = 1
-
-      if hps.trg_weight_norm > 0:
-        counts = data_sample.extract_counts
-        total_count = float(sum(counts))
-        weight_norm = hps.trg_weight_norm / (total_count + 0.01)
-        weights = [weight_norm * c for c in counts]  # normalize the weights
-
-        np_weights = np.ones([hps.num_sentences], dtype=np.float32)
-        for i, w in zip(extract_ids, weights):
-          if i < hps.num_sentences:
-            np_weights[i] = w
-      else:
-        np_weights = np.ones([hps.num_sentences], dtype=np.float32)
-
-      try:
-        summary = data_sample.summary
-      except:
-        summary = [""]
-      sample = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
-                                np_rel_pos, np_target, np_weights, document,
-                                summary)
-      self._sample_queue.put(sample)
+        element = SentencePair(np_sent_A, np_sent_B, length_A, length_B, label)
+        self._sample_queue.put(element)
 
   def _FillBucketInputQueue(self):
     """Fill bucketed batches into the bucket_input_queue."""
@@ -430,8 +407,12 @@ class SentencePairBatcher(ExtractiveBatcher):
       for _ in xrange(hps.batch_size * BUCKET_NUM_BATCH):
         samples.append(self._sample_queue.get())
 
-      if self._bucketing:
-        samples = sorted(samples, key=lambda inp: inp.enc_doc_len)
+      # Bucketing ignored
+      # if self._bucketing:
+      #   samples = sorted(samples, key=lambda inp: inp.enc_doc_len)
+
+      if self._shuffle_batches:
+        shuffle(samples)
 
       batches = []
       for i in xrange(0, len(samples), hps.batch_size):
@@ -450,19 +431,14 @@ class SentencePairBatcher(ExtractiveBatcher):
         model_batch: ExtractiveBatch
     """
     hps = self._hps
-    field_lists = [[], [], [], [], [], []]
-    origin_inputs, origin_outputs = [], []
+    field_lists = [[], [], [], [], []]
 
     for ex in batch:
-      for i in range(6):
+      for i in range(5):
         field_lists[i].append(ex[i])
-      origin_inputs.append(ex.origin_input)
-      origin_outputs.append(ex.origin_output)
 
     stacked_fields = [np.stack(field, axis=0) for field in field_lists]
 
-    return ExtractiveBatch(stacked_fields[0], stacked_fields[1],
-                           stacked_fields[2], stacked_fields[3],
-                           stacked_fields[4], stacked_fields[5],\
-                           (origin_inputs, origin_outputs))
-
+    return SentencePairBatch(stacked_fields[0], stacked_fields[1],
+                             stacked_fields[2], stacked_fields[3],
+                             stacked_fields[4])

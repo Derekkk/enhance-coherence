@@ -166,15 +166,15 @@ def linear(args, output_size, bias, bias_start=0.0, scope=None):
   return tf.nn.bias_add(res, biases)
 
 
-def create_cudnn_rnn(input_data,
-                     rnn_mode,
-                     num_layers,
-                     num_units,
-                     input_size,
-                     variable_name,
-                     direction="unidirectional",
-                     time_major=False,
-                     dropout=0.0):
+def cudnn_rnn_wrapper(input_data,
+                      rnn_mode,
+                      num_layers,
+                      num_units,
+                      input_size,
+                      variable_name,
+                      direction="unidirectional",
+                      time_major=False,
+                      dropout=0.0):
 
   if rnn_mode == "lstm":
     model = cudnn_rnn_ops.CudnnLSTM(

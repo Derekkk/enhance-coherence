@@ -19,11 +19,59 @@ import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
 
-# NB: batch_size is not given (None) so that it is variable.
-HParams = namedtuple("HParams", "mode, min_lr, lr, dropout,"
-                     "max_sent_len, emb_dim, num_hidden,"
-                     "conv_filters, conv_width, maxpool_width,"
-                     "max_grad_norm, decay_step, decay_rate")
+# NB: batch_size is not given (None) when deployed as a critic.
+HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
+                     "max_sent_len, emb_dim, num_hidden, conv_filters,"
+                     "conv_width, maxpool_width, max_grad_norm, decay_step,"
+                     "decay_rate")
+
+
+def CreateHParams(flags):
+  """Create Hyper-parameters from tf.app.flags.FLAGS"""
+  hps = HParams(
+      mode=flags.mode,  # train, eval, decode
+      lr=flags.lr,
+      min_lr=flags.min_lr,
+      dropout=flags.dropout,
+      batch_size=flags.batch_size,
+      max_sent_len=flags.max_sent_len,
+      emb_dim=flags.emb_dim,
+      num_hidden=flags.num_hidden,
+      conv_filters=flags.conv_filters,
+      conv_width=flags.conv_width,
+      maxpool_width=flags.maxpool_width,
+      max_grad_norm=flags.max_grad_norm,
+      decay_step=flags.decay_step,
+      decay_rate=flags.decay_rate)
+  return hps
+
+
+def TrainLoop(model, sess, batcher, valid_batcher, summary_writer, flags):
+  """Runs model training."""
+  step, losses, accuracies = 0, [], []
+  while step < flags.max_run_steps:
+    next_batch = batcher.next()
+    summary, loss, accuracy, train_step = model.run_train_step(sess, next_batch)
+    losses.append(loss)
+    accuracies.append(accuracy)
+    summary_writer.add_summary(summary, train_step)
+    step += 1
+
+    # Display current training loss
+    if step % flags.display_freq == 0:
+      avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss", train_step)
+      avg_acc = lib.compute_avg(accuracies, summary_writer, "avg_acc",
+                                train_step)
+      tf.logging.info("Train step %d: avg_loss %f avg_acc %f" %
+                      (train_step, avg_loss, avg_acc))
+      losses, accuracies = [], []
+      summary_writer.flush()
+
+    # Run evaluation on validation set
+    if step % flags.valid_freq == 0:
+      model.run_valid_steps(sess, valid_batcher, flags.num_valid_batch,
+                            summary_writer)
+      summary_writer.flush()
 
 
 class SeqMatchNet(object):
@@ -34,9 +82,8 @@ class SeqMatchNet(object):
       Retrieval-based Chatbots. arXiv:1612.01627 [Cs].
 
   [2] Hu, B., Lu, Z., Li, H., & Chen, Q. (2014). Convolutional neural network
-  architectures for matching natural language sentences. In Advances in neural
-  information processing systems (pp. 2042–2050).
-
+      architectures for matching natural language sentences. In Advances in neural
+      information processing systems (pp. 2042-2050).
   """
 
   def __init__(self, hps, vocab, num_gpus=1):
@@ -86,7 +133,7 @@ class SeqMatchNet(object):
       with tf.variable_scope('seq_match_net'), tf.device(self._device_0):
         # Encoder the first sentence with GRU
         with tf.variable_scope('gru_A'):
-          gru_A_output, _ = lib.create_cudnn_rnn(
+          gru_A_output, _ = lib.cudnn_rnn_wrapper(
               input_data=sent_A_embed,
               rnn_mode='gru',
               num_layers=1,
@@ -104,7 +151,7 @@ class SeqMatchNet(object):
 
         # Encoder the second sentence with GRU
         with tf.variable_scope('gru_B'):
-          gru_B_output, _ = lib.create_cudnn_rnn(
+          gru_B_output, _ = lib.cudnn_rnn_wrapper(
               input_data=sent_B_embed,
               rnn_mode='gru',
               num_layers=1,
@@ -169,8 +216,7 @@ class SeqMatchNet(object):
   def _add_loss(self):
     with tf.variable_scope("loss"), tf.device(self._device_0):
       batch_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-          labels=tf.to_float(self._targets, tf.float32),
-          logits=self._output_logit)
+          labels=tf.to_float(self._targets), logits=self._output_logit)
       loss = tf.reduce_mean(batch_loss)
 
       # Accuracy: threshold at 0.5
@@ -207,8 +253,11 @@ class SeqMatchNet(object):
   def run_train_step(self, sess, batch):
     sents_A, sents_B, lengths_A, lengths_B, targets = batch
 
-    to_return = [self._train_op, self._loss, self._accuracy, self._summaries]
-    return sess.run(
+    to_return = [
+        self._train_op, self._summaries, self._loss, self._accuracy,
+        self.global_step
+    ]
+    results = sess.run(
         to_return,
         feed_dict={
             self._sents_A: sents_A,
@@ -217,6 +266,8 @@ class SeqMatchNet(object):
             self._lengths_B: lengths_B,
             self._targets: targets
         })
+
+    return results[1:]
 
   def run_eval_step(self, sess, batch):
     sents_A, sents_B, lengths_A, lengths_B, targets = batch
@@ -234,7 +285,7 @@ class SeqMatchNet(object):
 
   def run_valid_steps(self, sess, data_batcher, num_valid_batch,
                       summary_writer):
-    losses, accuracies = []
+    losses, accuracies = [], []
     for _ in xrange(num_valid_batch):
       next_batch = data_batcher.next()
       loss, accuracy = self.run_eval_step(sess, next_batch)

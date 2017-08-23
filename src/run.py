@@ -21,7 +21,6 @@ tf.app.flags.DEFINE_string("ckpt_root", "", "Directory for checkpoint root.")
 tf.app.flags.DEFINE_string("summary_dir", "", "Directory for summary files.")
 tf.app.flags.DEFINE_string("mode", "train", "train/decode mode")
 tf.app.flags.DEFINE_integer("batch_size", 32, "Size of minibatch.")
-tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
 # ----------- Train mode related flags ------------------
 tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
@@ -35,7 +34,7 @@ tf.app.flags.DEFINE_float("dropout", 0.0, "Dropout rate.")
 tf.app.flags.DEFINE_string("valid_path", "",
                            "Path expression to validation set.")
 tf.app.flags.DEFINE_integer("valid_freq", 1000, "How often to run eval.")
-tf.app.flags.DEFINE_integer("num_valid_batch", 50,
+tf.app.flags.DEFINE_integer("num_valid_batch", 30,
                             "Number valid batches in each _Valid step.")
 tf.app.flags.DEFINE_integer("checkpoint_secs", 1200, "How often to checkpoint.")
 tf.app.flags.DEFINE_integer("max_to_keep", None,
@@ -56,9 +55,11 @@ tf.app.flags.DEFINE_integer("beam_size", 10,
 tf.app.flags.DEFINE_string("decode_dir", "", "Directory for decode summaries.")
 tf.app.flags.DEFINE_integer("extract_topk", 3,
                             "Number of sentence extracted in decode mode.")
-# ----------- summarunner related flags ----------------
+# ----------- general flags ----------------
 tf.app.flags.DEFINE_integer("emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("num_gpus", 1, "Number of gpus used.")
+# ----------- summarunner related flags ----------------
+tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
 tf.app.flags.DEFINE_integer("num_sentences", 100,
                             "Maximum number of sentences in a document.")
 tf.app.flags.DEFINE_integer("num_words_sent", 50,
@@ -82,11 +83,20 @@ tf.app.flags.DEFINE_integer("min_num_words_sent", 0,
 tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
                             "Normalize the extraction target weights. "
                             "No normalization if it is not positive.")
+# ----------- seqmatch related flags ----------------
+tf.app.flags.DEFINE_integer("num_hidden", 256,
+                            "Number of hidden units in encoder RNN.")
+tf.app.flags.DEFINE_integer("max_sent_len", 50, "Maximum length of sentences.")
+tf.app.flags.DEFINE_integer("conv_filters", 256,
+                            "Number of filters in the CNN.")
+tf.app.flags.DEFINE_integer("conv_width", 3, "Width of convolution kernel.")
+tf.app.flags.DEFINE_integer("maxpool_width", 2, "Width of max-pooling.")
 
-DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
+# DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
 
-# DocSummary = namedtuple('DocSummary',
-#                         'url document summary extract_ids rouge_2')
+DocSummary = namedtuple('DocSummary',
+                        'url document summary extract_ids rouge_2')
+
 # DocSummaryCount = namedtuple('DocSummaryCount',
 #                              'url document extract_ids count')
 
@@ -143,6 +153,9 @@ def main():
   if model_type == "summarunner":
     from models.summarunner import CreateHParams, TrainLoop
     from models.summarunner import SummaRuNNer as Model
+  elif model_type == "seqmatch":
+    from models.seqmatch import CreateHParams, TrainLoop
+    from models.seqmatch import SeqMatchNet as Model
   else:
     raise ValueError("%s model NOT defined." % model_type)
   tf.logging.info("Using model %s." % model_type.upper())
@@ -183,7 +196,25 @@ def main():
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
           shuffle_batches=shuffle_batches)
-
+  elif model_type == "seqmatch":
+    batcher = batch_reader.SentencePairBatcher(
+        FLAGS.data_path,
+        input_vocab,
+        hps,
+        bucketing=FLAGS.use_bucketing,
+        truncate_input=FLAGS.truncate_input,
+        num_epochs=num_epochs,
+        shuffle_batches=shuffle_batches)
+    if FLAGS.mode == "train":
+      # Create validation data reader
+      valid_batcher = batch_reader.SentencePairBatcher(
+          FLAGS.valid_path,
+          input_vocab,
+          hps,
+          bucketing=FLAGS.use_bucketing,
+          truncate_input=FLAGS.truncate_input,
+          num_epochs=num_epochs,
+          shuffle_batches=shuffle_batches)
   else:
     raise NotImplementedError()
 

@@ -1,11 +1,11 @@
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 python run.py \
   --model=summarunner \
-  --data_path=data/dailymail/training_shuf.pkl \
-  --input_vocab=data/dailymail/training.vocab \
+  --data_path=data/cnndaily/training_shuf.pkl \
+  --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/dailymail/ex01 \
-  --summary_dir=log/dailymail/ex01 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex01 \
+  --summary_dir=log/cnndaily/summar/ex01 \
   --mode=train \
   --lr 0.5 \
   --min_lr 0.0001 \
@@ -14,8 +14,8 @@ python run.py \
   --dropout 0.0 \
   --batch_size 64 \
   --max_run_steps 100000 \
-  --valid_path=data/dailymail/validation_shuf.pkl \
   --display_freq 100 \
+  --valid_path=data/cnndaily/validation_shuf.pkl \
   --valid_freq 500 \
   --checkpoint_secs 1200 \
   --use_bucketing False \
@@ -28,6 +28,6 @@ python run.py \
   --enc_layers 1 \
   --pos_emb_dim 64 \
   --doc_repr_dim 512 \
-  --word_conv_k_sizes '1,3,5,7' \
+  --word_conv_k_sizes '3,5,7' \
   --word_conv_filter 128 \
   --min_num_input_sents 3 \
