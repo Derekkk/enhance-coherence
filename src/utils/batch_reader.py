@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+
 """Batch reader to seq2seq attention model, with bucketing support."""
 
 import Queue
-from random import shuffle
+from random import shuffle, sample, randint
 from threading import Thread
 import time
 import numpy as np
@@ -41,6 +42,25 @@ QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
 BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
 GET_TIMEOUT = 120
 
+def neg_samp_pairs(sequence, size=0):
+  if len(sequence) < 2:
+    return []
+  elif len(sequence) == 2:
+    return [(sequence[1], sequence[0])]
+
+  if not size:
+    size = len(sequence)
+
+  neg_samples_set = set()
+  seq_end_idx = len(sequence) - 1
+  while len(neg_samples_set) < size:
+    id_1 = randint(0, seq_end_idx)
+    id_2 = randint(0, seq_end_idx)
+    if id_1 != id_2 and id_1 + 1 != id_2:
+      neg_samples_set.add((id_1, id_2))
+
+  neg_samples = [(sequence[i], sequence[j]) for i, j in neg_samples_set]
+  return neg_samples
 
 class ExtractiveBatcher(object):
   """Batch reader for extractive summarization data."""
@@ -307,9 +327,32 @@ class SentencePairBatcher(ExtractiveBatcher):
     data_generator = self._DataGenerator(data_path, self._num_epochs)
 
     # pdb.set_trace()
-    for data_sample in data_generator:
+    for data_sample in data_generator:  # type(data_sample): DocSummary
       document = data_sample.document
-      extract_ids = data_sample.extract_ids
+      summary = data_sample.summary
+      if not summary:
+        continue
+
+      # Step 1: sample positive/negative pairs
+      positive_pairs = []
+
+      # Positive 1 (25%): summary
+      summary_length = len(summary)
+      for i in range(summary_length - 1):
+        positive_pairs.append((summary[i], summary[i+1]))
+
+      # Positive 2 (25%): document
+      doc_length = len(document)
+      if doc_length > summary_length:
+        sampled_ids = sample(range(doc_length - 1), summary_length)
+        for i in sampled_ids:
+          positive_pairs.append((document[i], document[i+1]))
+        
+      # Negative (50%)
+      if summary_length > 1:
+        summary_neg = neg_samp_pairs(summary)
+      document_neg = neg_samp_pairs(document, len(positive_pairs) - len(summary_neg))
+      negative_pairs = summary_neg + document_neg
 
       # Content as enc_input
       enc_input = [enc_vocab.GetIds(s) for s in document]
