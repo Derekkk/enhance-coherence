@@ -237,8 +237,8 @@ class ExtractiveBatcher(object):
       except:
         summary = [""]
       element = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
-                                np_rel_pos, np_target, np_weights, document,
-                                summary)
+                                 np_rel_pos, np_target, np_weights, document,
+                                 summary)
       self._sample_queue.put(element)
 
   def _DataGenerator(self, path, num_epochs=None):
@@ -250,6 +250,8 @@ class ExtractiveBatcher(object):
     while True:
       if num_epochs is not None and epoch >= num_epochs:
         return
+      if self._shuffle_batches:
+        shuffle(dataset)
 
       for d in dataset:
         yield d

@@ -8,7 +8,7 @@ python run.py \
   --summary_dir=log/cnndaily/ex02 \
   --mode=train \
   --lr 0.1 \
-  --min_lr 0.001 \
+  --min_lr 0.03 \
   --decay_step 30000 \
   --decay_rate 0.98 \
   --dropout 0.0 \

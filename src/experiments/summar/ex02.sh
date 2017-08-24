@@ -8,7 +8,7 @@ python run.py \
   --summary_dir=log/cnndaily/summar/ex02 \
   --mode=train \
   --lr 0.5 \
-  --min_lr 0.0001 \
+  --min_lr 0.001 \
   --decay_step 30000 \
   --decay_rate 0.8 \
   --dropout 0.2 \
@@ -24,10 +24,10 @@ python run.py \
   --num_sentences 80 \
   --num_words_sent 50 \
   --rel_pos_max_idx 11 \
-  --enc_num_hidden 256 \
+  --enc_num_hidden 512 \
   --enc_layers 1 \
   --pos_emb_dim 64 \
   --doc_repr_dim 512 \
-  --word_conv_k_sizes '3,5,7' \
+  --word_conv_k_sizes '1,3,5,7' \
   --word_conv_filter 128 \
   --min_num_input_sents 3 \

@@ -222,10 +222,13 @@ def main():
     model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
     _Train(model, batcher, valid_batcher, TrainLoop)  # start training
   elif FLAGS.mode == "decode":
-    model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
-    decoder = SummaRuNNerDecoder(model, hps)
-    output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
-    evaluate.eval_rouge(output_fn)
+    if model_type == "summarunner":
+      model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
+      decoder = SummaRuNNerDecoder(model, hps)
+      output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
+      evaluate.eval_rouge(output_fn)
+    else:
+      raise NotImplementedError()
   else:
     raise ValueError("Invalid mode %s. Try train/decode instead." % FLAGS.mode)
 

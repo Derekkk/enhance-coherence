@@ -1,14 +1,14 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 python run.py \
   --model=summarunner \
   --data_path=data/cnndaily/training_shuf.pkl \
   --input_vocab=data/cnndaily/training.vocab \
-  --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex01 \
-  --summary_dir=log/cnndaily/summar/ex01 \
+  --input_vsize 200000 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex03 \
+  --summary_dir=log/cnndaily/summar/ex03 \
   --mode=train \
   --lr 0.5 \
-  --min_lr 0.0001 \
+  --min_lr 0.01 \
   --decay_step 30000 \
   --decay_rate 0.5 \
   --dropout 0.0 \
