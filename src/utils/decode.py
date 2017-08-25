@@ -36,7 +36,7 @@ def arg_topk(values, k):
 class Hypothesis(object):
   """Defines a hypothesis during beam search."""
 
-  def __init__(self, tokens, log_prob, state):
+  def __init__(self, size):
     """Hypothesis constructor.
 
     Args:
@@ -44,11 +44,11 @@ class Hypothesis(object):
       log_prob: log prob of the start tokens, usually 1.
       state: decoder initial states.
     """
-    self.tokens = tokens
+    self.extracts = []
     self.log_prob = log_prob
-    self.state = state
+    self.hist_summary = np.zeros([1, size], np.float32)
 
-  def Extend(self, token, log_prob, new_state):
+  def extend(self, extract, log_prob, sent_vec):
     """Extend the hypothesis with result from latest step.
 
     Args:
@@ -58,105 +58,91 @@ class Hypothesis(object):
     Returns:
       New Hypothesis with the results from latest step.
     """
-    return Hypothesis(self.tokens + [token], self.log_prob + log_prob,
-                      new_state)
+    if extract == 0:
+      return Hypothesis(self.extracts + [extract], self.log_prob + log_prob,
+                        self.hist_summary)
+    else:
+      return Hypothesis(self.extracts + [extract], self.log_prob + log_prob,
+                        self.hist_summary + sent_vec)
 
   @property
-  def latest_token(self):
-    return self.tokens[-1]
+  def extract_ids(self):
+    return [i for i, x in enumerate(self.extracts) if x]
 
   def __str__(self):
-    return ('Hypothesis(log prob = %.4f, tokens = %s)' % (self.log_prob,
-                                                          self.tokens))
+    return 'Hypothesis(log prob = %.4f, extract_ids = [%s])' % (
+        self.log_prob, ", ".join([str(x) for x in self.extract_ids]))
 
 
 class BeamSearch(object):
   """Beam search."""
 
-  def __init__(self, model, beam_size, start_token, end_token, unk_token,
-               max_steps):
+  def __init__(self, model, hps):
     """Creates BeamSearch object.
 
     Args:
-      model: Seq2SeqAttentionModel.
-      beam_size: int.
-      start_token: int, id of the token to start decoding with
-      end_token: int, id of the token that completes an hypothesis
-      max_steps: int, upper limit on the size of the hypothesis
+      model: SummaRuNNerRF model.
+      hps: hyperparamters
     """
     self._model = model
-    self._beam_size = beam_size
-    self._start_token = start_token
-    self._end_token = end_token
-    self._max_steps = max_steps
-    self._unk_token = unk_token
+    self._hps = hps
 
-  def BeamSearch(self, sess, enc_input, enc_seqlen):
+  def beam_search(self, sess, enc_input, enc_doc_len, enc_sent_len,
+                  sent_rel_pos):
     """Performs beam search for decoding.
 
     Args:
       sess: tf.Session, session
-      enc_input: ndarray of shape (1, enc_length), the document ids to encode
+      enc_input: ndarray of shape (1, enc_), the document ids to encode
       enc_seqlen: ndarray of shape (1), the length of the sequnce
 
     Returns:
       hyps: list of Hypothesis, the best hypotheses found by beam search,
           ordered by score
     """
+    beam_size = self._hps.batch_size  # NB: use batch_size as beam size
+    model = self._model
 
-    # Repeat the input and length by beam_size times
-    enc_batch = np.tile(enc_input, (self._beam_size, 1))
-    enc_lens = np.tile(enc_seqlen, self._beam_size)
+    # # Repeat the inputs by beam_size times
+    # enc_batch = np.tile(enc_input, (beam_size, 1, 1))
+    # enc_doc_lens = np.tile(enc_doc_len, beam_size)
+    # enc_sent_lens = np.tile(enc_sent_len, (beam_size, 1))
+    # sent_rel_poses = np.tile(sent_rel_pos, (beam_size, 1))
 
     # Run the encoder and extract the outputs and final state.
-    enc_out_states, dec_in_state = self._model.encode_top_state(
-        sess, enc_batch, enc_lens)
-    # Replicate the initial states K times for the first step.
-    hyps = [Hypothesis([self._start_token], 0.0, dec_in_state)
-           ] * self._beam_size
+    sent_vecs, abs_pos_embs, rel_pos_embs, doc_repr = model.decode_get_feats(
+        sess, enc_input, enc_doc_len, enc_sent_len, sent_rel_pos)
+
+    # Replicate the initialized hypothesis for the first step.
+    hyps = [Hypothesis(sent_vecs.shape[2])]
     results = []
+    max_steps = enc_doc_len[0]
 
-    steps = 0
-    while steps < self._max_steps and len(results) < self._beam_size:
-      latest_tokens = [h.latest_token for h in hyps]
-      states = [h.state for h in hyps]
+    for i in xrange(max_steps):
+      hyps_len = len(hyps)
+      sent_vec_i = sent_vecs[:, i, :]
+      cur_sent_vec = np.tile(sent_vec_i, (hyps_len, 1))
+      cur_abs_pos = np.tile(abs_pos_embs[:, i, :], (hyps_len, 1))
+      cur_rel_pos = np.tile(rel_pos_embs[:, i, :], (hyps_len, 1))
+      cur_doc_repr = np.tile(doc_repr, (hyps_len, 1))
+      cur_hist_sum = np.concatenate([h.hist_summary for h in hyps], axis=0)
 
-      topk_ids, topk_log_probs, new_states = self._model.decode_topk(
-          sess, latest_tokens, enc_out_states, states)
-
-      # The first step takes the best K results from first hyps. Following
-      # steps take the best K results from K*K hyps.
-      num_beam_source = 1 if steps == 0 else len(hyps)
+      ext_log_probs = model.decode_log_probs(sess, cur_sent_vec, cur_abs_pos,
+                                             cur_rel_pos, cur_doc_repr,
+                                             cur_hist_sum)
 
       # Extend each hypothesis.
       all_hyps = []
-      for i in xrange(num_beam_source):
-        h, ns = hyps[i], new_states[i]
-        for j in xrange(topk_ids.shape[1]):
-          if topk_ids[i, j] != self._unk_token:
-            all_hyps.append(h.Extend(topk_ids[i, j], topk_log_probs[i, j], ns))
+      for j, h in enumerate(hyps):
+        all_hyps.append(h.extend(0, ext_log_probs[j, 0], sent_vec_i))
+        all_hyps.append(h.extend(1, ext_log_probs[j, 1], sent_vec_i))
 
-      # Filter and collect any hypotheses that have the end token.
-      hyps = []
-      for h in self._BestHyps(all_hyps):
-        if h.latest_token == self._end_token:
-          # Pull the hypothesis off the beam if the end token is reached.
-          results.append(h)
-        else:
-          # Otherwise continue to the extend the hypothesis.
-          hyps.append(h)
-        if len(hyps) == self._beam_size or len(results) == self._beam_size:
-          break
+      hyps = self._BestHyps(all_hyps)[:beam_size]
 
-      steps += 1
+    return hyps
 
-    if steps == self._max_steps:
-      results.extend(hyps)
-
-    return self._BestHyps(results, normalize_by_length=True)
-
-  def _BestHyps(self, hyps, normalize_by_length=False):
-    """Sort the hyps based on log probs and length.
+  def _BestHyps(self, hyps):
+    """Sort the hyps based on log probs.
 
     Args:
       hyps: A list of hypothesis.
@@ -164,94 +150,28 @@ class BeamSearch(object):
       hyps: A list of sorted hypothesis in reverse log_prob order.
     """
     # This length normalization is only effective for the final results.
-    if normalize_by_length:
-      return sorted(
-          hyps, key=lambda h: h.log_prob / len(h.tokens), reverse=True)
-    else:
-      return sorted(hyps, key=lambda h: h.log_prob, reverse=True)
+    return sorted(hyps, key=lambda h: h.log_prob, reverse=True)
 
 
-class DecodeIO(object):
-  """Writes the decoded and references to RKV files for Rouge score.
+class SummaRuNNerRFDecoder(object):
+  """Beam search decoder for SummaRuNNerRF."""
 
-    See nlp/common/utils/internal/rkv_parser.py for detail about rkv file.
-  """
-
-  def __init__(self, outdir):
-    self._cnt = 0
-    self._outdir = outdir
-    if not os.path.exists(self._outdir):
-      os.makedirs(self._outdir)
-    self._ref_file = None
-    self._dec_file = None
-
-  def Write(self, reference, decode):
-    """Writes the reference and decoded outputs to RKV files.
-
-    Args:
-      reference: The human (correct) result.
-      decode: The machine-generated result
-    """
-    self._ref_file.write(reference + '\n')
-    self._dec_file.write(decode + '\n')
-    self._cnt += 1
-    if self._cnt % DECODE_IO_FLUSH_INTERVAL == 0:
-      self._ref_file.flush()
-      self._dec_file.flush()
-
-  def ResetFiles(self, step):
-    """Resets the output files. Must be called once before Write()."""
-    if self._ref_file:
-      self._ref_file.close()
-    if self._dec_file:
-      self._dec_file.close()
-    timestamp = int(time.time())
-
-    ref_fn = os.path.join(self._outdir, 'ref_%d_%d' % (step, timestamp))
-    dec_fn = os.path.join(self._outdir, 'dec_%d_%d' % (step, timestamp))
-    self._ref_file = open(ref_fn, 'w')
-    self._dec_file = open(dec_fn, 'w')
-
-    return ref_fn, dec_fn
-
-
-class BSDecoder(object):
-  """Beam search decoder."""
-
-  def __init__(self, model, batch_reader, hps, vocab):
+  def __init__(self, model, hps):
     """Beam search decoding.
 
     Args:
-      model: The seq2seq attentional model.
-      batch_reader: The batch data reader.
-      hps: Hyperparamters.
-      vocab: Vocabulary
+      model: the SummaRuNNerRF model.
+      hps: hyperparamters.
     """
     self._model = model
     self._model.build_graph()
-    self._batch_reader = batch_reader
     self._hps = hps
-    self._vocab = vocab
 
-    self._saver = tf.train.Saver()
-    self._decode_io = DecodeIO(FLAGS.decode_dir)
-
-  def DecodeLoop(self):
+  def Decode(self, batch_reader):
     """Decoding loop for long running process."""
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-    filenames = self._Decode(self._saver, sess)
-    return filenames
+    saver = tf.train.Saver()
 
-  def _Decode(self, saver, sess):
-    """Restore a checkpoint and decode it.
-
-    Args:
-      saver: Tensorflow checkpoint saver.
-      sess: Tensorflow session.
-    Returns:
-      ref_fn: path of reference file.
-      dec_fn: path of decode file.
-    """
     # Restore the saved checkpoint model
     ckpt_state = tf.train.get_checkpoint_state(FLAGS.ckpt_root)
     if not (ckpt_state and ckpt_state.model_checkpoint_path):
@@ -264,31 +184,37 @@ class BSDecoder(object):
     tf.logging.info('Renamed checkpoint path %s', ckpt_path)
     saver.restore(sess, ckpt_path)
 
-    # Name output files by number of train steps and time
-    step = self._model.get_global_step(sess)
-    ref_fn, dec_fn = self._decode_io.ResetFiles(step)
+    result_list = []
+    bs = BeamSearch(self._model, self._hps)
 
-    unk_id = self._vocab.unk_id if FLAGS.exclude_unks else None
+    for next_batch in batch_reader:
+      enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _ = next_batch
 
-    bs = BeamSearch(self._model, self._hps.beam_size, self._vocab.start_id,
-                    self._vocab.end_id, unk_id, self._hps.dec_timesteps)
-
-    for next_batch in self._batch_reader:
-      (enc_batch, _, _, enc_lens, _, origin_inputs, origin_outputs) = next_batch
-
-      for i in xrange(self._hps.batch_size):
+      for i in xrange(enc_batch.shape[0]):
         enc_batch_i = enc_batch[i:i + 1]
-        enc_lens_i = enc_lens[i]
+        enc_doc_len_i = enc_doc_lens[i:i + 1]
+        enc_sent_len_i = enc_sent_lens[i:i + 1]
+        sent_rel_pos_i = sent_rel_pos[i:i + 1]
 
-        best_beam = bs.BeamSearch(sess, enc_batch_i, enc_lens_i)[0]
+        best_beam = bs.beam_search(sess, enc_batch_i, enc_doc_len_i,
+                                   enc_sent_len_i, sent_rel_pos_i)[0]
 
-        decode_output = [int(t) for t in best_beam.tokens[1:]]
+        decode_output = best_beam.extract_ids  #TODO
         self._DecodeBatch(origin_inputs[i], origin_outputs[i], decode_output)
 
-    tf.logging.info(
-        "Finished decoding into following files:\nreference=%s\ndecode=%s",
-        ref_fn, dec_fn)
-    return ref_fn, dec_fn
+    # Name output files by number of train steps and time
+    decode_dir = FLAGS.decode_dir
+    if not os.path.exists(decode_dir):
+      os.makedirs(decode_dir)
+    step = model.get_global_step(sess)
+    timestep = int(time.time())
+    output_fn = os.path.join(decode_dir, 'iter_%d_%d' % (step, timestep))
+
+    with open(output_fn, 'w') as f:
+      f.writelines(result_list)
+    tf.logging.info('Outputs written to %s', output_fn)
+
+    return output_fn
 
   def _DecodeBatch(self, article, abstract, output_ids):
     """Convert id to words and writing results.
@@ -319,8 +245,8 @@ class SummaRuNNerDecoder(object):
     """Beam search decoding.
 
     Args:
-      model: The seq2seq attentional model.
-      hps: Hyperparamters.
+      model: the SummaRuNNer model.
+      hps: hyperparamters.
     """
     self._model = model
     self._model.build_graph()
@@ -343,10 +269,8 @@ class SummaRuNNerDecoder(object):
     tf.logging.info('Renamed checkpoint path %s', ckpt_path)
     saver.restore(sess, ckpt_path)
 
-    # Name output files by number of train steps and time
     model = self._model
     hps = self._hps
-
     result_list = []
     # Run decoding for data samples
     for next_batch in batch_reader:
@@ -365,6 +289,7 @@ class SummaRuNNerDecoder(object):
         result_list.append(" ".join(
             [sys_tag, decoded_str, ref_tag, summary_str]) + "\n")
 
+    # Name output files by number of train steps and time
     decode_dir = FLAGS.decode_dir
     if not os.path.exists(decode_dir):
       os.makedirs(decode_dir)

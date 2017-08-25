@@ -18,20 +18,12 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
-import re
 
 # NB: batch_size is not given (None) when deployed as a critic.
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "max_sent_len, emb_dim, num_hidden, conv_filters,"
                      "conv_width, maxpool_width, max_grad_norm, decay_step,"
                      "decay_rate")
-
-
-def parse_list_str(list_str):
-  l = [int(x) for x in re.split("[\[\]\s,]", list_str) if x]
-  if not l:
-    raise ValueError("List is empty.")
-  return l
 
 
 def CreateHParams(flags):
@@ -45,9 +37,9 @@ def CreateHParams(flags):
       max_sent_len=flags.max_sent_len,
       emb_dim=flags.emb_dim,
       num_hidden=flags.num_hidden,
-      conv_filters=parse_list_str(flags.conv_filters),
-      conv_width=parse_list_str(flags.conv_width),
-      maxpool_width=parse_list_str(flags.maxpool_width),
+      conv_filters=lib.parse_list_str(flags.conv_filters),
+      conv_width=lib.parse_list_str(flags.conv_width),
+      maxpool_width=lib.parse_list_str(flags.maxpool_width),
       max_grad_norm=flags.max_grad_norm,
       decay_step=flags.decay_step,
       decay_rate=flags.decay_rate)

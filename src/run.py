@@ -5,7 +5,6 @@ import tensorflow as tf
 from collections import namedtuple
 
 from utils import batch_reader, vocab, evaluate
-from utils.decode import SummaRuNNerDecoder
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string("model", "", "The name of model runned.")
@@ -20,7 +19,8 @@ tf.app.flags.DEFINE_integer("output_vsize", 0,
 tf.app.flags.DEFINE_string("ckpt_root", "", "Directory for checkpoint root.")
 tf.app.flags.DEFINE_string("summary_dir", "", "Directory for summary files.")
 tf.app.flags.DEFINE_string("mode", "train", "train/decode mode")
-tf.app.flags.DEFINE_integer("batch_size", 32, "Size of minibatch.")
+tf.app.flags.DEFINE_integer("batch_size", 1,
+                            "Size of minibatch. Beam size in decode mode.")
 # ----------- Train mode related flags ------------------
 tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
@@ -50,8 +50,6 @@ tf.app.flags.DEFINE_bool("truncate_input", False,
                          "Truncate inputs that are too long. If False, "
                          "examples that are too long are discarded.")
 # ----------- Decode mode related flags ------------------
-tf.app.flags.DEFINE_integer("beam_size", 10,
-                            "beam size for beam search decoding.")
 tf.app.flags.DEFINE_string("decode_dir", "", "Directory for decode summaries.")
 tf.app.flags.DEFINE_integer("extract_topk", 3,
                             "Number of sentence extracted in decode mode.")
@@ -83,6 +81,11 @@ tf.app.flags.DEFINE_integer("min_num_words_sent", 0,
 tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
                             "Normalize the extraction target weights. "
                             "No normalization if it is not positive.")
+# ----------- summarunner_rf related flags ----------------
+tf.app.flags.DEFINE_string("train_mode", "sl",
+                           "Kernel sizes of word-level CNN.")
+tf.app.flags.DEFINE_string("mlp_num_hidden", "256",
+                           "Kernel sizes of word-level CNN.")
 # ----------- seqmatch related flags ----------------
 tf.app.flags.DEFINE_integer("num_hidden", 256,
                             "Number of hidden units in encoder RNN.")
@@ -152,6 +155,9 @@ def main():
   if model_type == "summarunner":
     from models.summarunner import CreateHParams, TrainLoop
     from models.summarunner import SummaRuNNer as Model
+  if model_type == "summarunner_rf":
+    from models.summarunner_rf import CreateHParams, TrainLoop
+    from models.summarunner_rf import SummaRuNNerRF as Model
   elif model_type == "seqmatch":
     from models.seqmatch import CreateHParams, TrainLoop
     from models.seqmatch import SeqMatchNet as Model
@@ -172,15 +178,15 @@ def main():
   else:
     num_epochs = 1  # only go through test set once
     shuffle_batches = False  # do not shuffle the batches
-    hps._replace(batch_size=1)  # ensure all examples are used
+    batcher_hps = hps._replace(batch_size=1)  # ensure all examples are used
     batch_reader.BUCKET_NUM_BATCH = 1  # ensure all examples are used
 
   # Create data reader
-  if model_type == "summarunner":
+  if model_type in ["summarunner", "summarunner_rf"]:
     batcher = batch_reader.ExtractiveBatcher(
         FLAGS.data_path,
         input_vocab,
-        hps,
+        batcher_hps,
         bucketing=FLAGS.use_bucketing,
         truncate_input=FLAGS.truncate_input,
         num_epochs=num_epochs,
@@ -190,7 +196,7 @@ def main():
       valid_batcher = batch_reader.ExtractiveBatcher(
           FLAGS.valid_path,
           input_vocab,
-          hps,
+          batcher_hps,
           bucketing=FLAGS.use_bucketing,
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
@@ -199,7 +205,7 @@ def main():
     batcher = batch_reader.SentencePairBatcher(
         FLAGS.data_path,
         input_vocab,
-        hps,
+        batcher_hps,
         bucketing=FLAGS.use_bucketing,
         truncate_input=FLAGS.truncate_input,
         num_epochs=num_epochs,
@@ -209,7 +215,7 @@ def main():
       valid_batcher = batch_reader.SentencePairBatcher(
           FLAGS.valid_path,
           input_vocab,
-          hps,
+          batcher_hps,
           bucketing=FLAGS.use_bucketing,
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
@@ -222,9 +228,18 @@ def main():
     _Train(model, batcher, valid_batcher, TrainLoop)  # start training
   elif FLAGS.mode == "decode":
     if model_type == "summarunner":
+      from utils.decode import SummaRuNNerDecoder
+      hps = hps._replace(batch_size=1)
       model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
       decoder = SummaRuNNerDecoder(model, hps)
       output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
+      evaluate.eval_rouge(output_fn)
+    elif model_type == "summarunner_rf":
+      from utils.decode import SummaRuNNerRFDecoder
+      model = Model(
+          hps._replace(batch_size=None), input_vocab, num_gpus=FLAGS.num_gpus)
+      decoder = SummaRuNNerRFDecoder(model, hps)
+      output_fn = decoder.Decode(batcher)
       evaluate.eval_rouge(output_fn)
     else:
       raise NotImplementedError()
