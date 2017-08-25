@@ -87,10 +87,9 @@ tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
 tf.app.flags.DEFINE_integer("num_hidden", 256,
                             "Number of hidden units in encoder RNN.")
 tf.app.flags.DEFINE_integer("max_sent_len", 50, "Maximum length of sentences.")
-tf.app.flags.DEFINE_integer("conv_filters", 256,
-                            "Number of filters in the CNN.")
-tf.app.flags.DEFINE_integer("conv_width", 3, "Width of convolution kernel.")
-tf.app.flags.DEFINE_integer("maxpool_width", 2, "Width of max-pooling.")
+tf.app.flags.DEFINE_string("conv_filters", 256, "Number of filters in the CNN.")
+tf.app.flags.DEFINE_string("conv_width", 3, "Width of convolution kernel.")
+tf.app.flags.DEFINE_string("maxpool_width", 2, "Width of max-pooling.")
 
 # DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
 

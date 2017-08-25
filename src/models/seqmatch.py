@@ -18,12 +18,20 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
+import re
 
 # NB: batch_size is not given (None) when deployed as a critic.
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "max_sent_len, emb_dim, num_hidden, conv_filters,"
                      "conv_width, maxpool_width, max_grad_norm, decay_step,"
                      "decay_rate")
+
+
+def parse_list_str(list_str):
+  l = [int(x) for x in re.split("[\[\]\s,]", list_str) if x]
+  if not l:
+    raise ValueError("List is empty.")
+  return l
 
 
 def CreateHParams(flags):
@@ -37,9 +45,9 @@ def CreateHParams(flags):
       max_sent_len=flags.max_sent_len,
       emb_dim=flags.emb_dim,
       num_hidden=flags.num_hidden,
-      conv_filters=flags.conv_filters,
-      conv_width=flags.conv_width,
-      maxpool_width=flags.maxpool_width,
+      conv_filters=parse_list_str(flags.conv_filters),
+      conv_width=parse_list_str(flags.conv_width),
+      maxpool_width=parse_list_str(flags.maxpool_width),
       max_grad_norm=flags.max_grad_norm,
       decay_step=flags.decay_step,
       decay_rate=flags.decay_rate)
@@ -189,19 +197,20 @@ class SeqMatchNet(object):
           L1 = tf.stack([M1, M2, M3], axis=3)  # [?,max_sent_len,max_sent_len,3]
 
         # Layer 2
-        conv_output = tf.layers.conv2d(
-            L1,
-            hps.conv_filters,
-            hps.conv_width,
-            padding="same",
-            activation=tf.nn.relu,
-            kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
-            name="conv_layer2")  # [?,max_sent_len,max_sent_len,conv_filters]
-        maxpool_output = tf.layers.max_pooling2d(
-            conv_output,
-            hps.maxpool_width,
-            hps.maxpool_width,
-            name="maxpool_layer2")
+        conv_input = L1
+        for i, (cf, cw, mw) in enumerate(
+            zip(hps.conv_filters, hps.conv_width, hps.maxpool_width)):
+          conv_output = tf.layers.conv2d(
+              conv_input,
+              cf,
+              cw,
+              padding="valid",
+              activation=tf.nn.relu,
+              kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+              name="conv_layer_%d" % (i + 2))
+          maxpool_output = tf.layers.max_pooling2d(
+              conv_output, mw, mw, name="maxpool_layer_%d" % (i + 2))
+          conv_input = maxpool_output
 
         # Layer 3
         self._output_logit = tf.squeeze(
@@ -210,7 +219,7 @@ class SeqMatchNet(object):
                 1,
                 activation_fn=None,
                 weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
-                scope="fc_layer3"))  # [?]
+                scope="fc_layer"))  # [?]
         self._output_prob = tf.sigmoid(self._output_logit)  # [?]
 
   def _add_loss(self):

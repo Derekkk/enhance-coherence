@@ -7,10 +7,10 @@ python run.py \
   --ckpt_root=checkpoints/cnndaily/summar/ex03 \
   --summary_dir=log/cnndaily/summar/ex03 \
   --mode=train \
-  --lr 0.5 \
+  --lr 0.01 \
   --min_lr 0.01 \
   --decay_step 30000 \
-  --decay_rate 0.5 \
+  --decay_rate 1.0 \
   --dropout 0.0 \
   --batch_size 64 \
   --max_run_steps 100000 \
