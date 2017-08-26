@@ -36,7 +36,7 @@ def arg_topk(values, k):
 class Hypothesis(object):
   """Defines a hypothesis during beam search."""
 
-  def __init__(self, size):
+  def __init__(self, extracts, log_prob, hist_summary):
     """Hypothesis constructor.
 
     Args:
@@ -44,9 +44,9 @@ class Hypothesis(object):
       log_prob: log prob of the start tokens, usually 1.
       state: decoder initial states.
     """
-    self.extracts = []
+    self.extracts = extracts
     self.log_prob = log_prob
-    self.hist_summary = np.zeros([1, size], np.float32)
+    self.hist_summary = hist_summary
 
   def extend(self, extract, log_prob, sent_vec):
     """Extend the hypothesis with result from latest step.
@@ -112,17 +112,22 @@ class BeamSearch(object):
     # Run the encoder and extract the outputs and final state.
     sent_vecs, abs_pos_embs, rel_pos_embs, doc_repr = model.decode_get_feats(
         sess, enc_input, enc_doc_len, enc_sent_len, sent_rel_pos)
+    # NB: sent_vecs.shape=[num_sentences, 1, enc_num_hidden*2]
+    # NB: abs_pos_embs.shape=[num_sentences, 1, pos_emb_dim]
+    # NB: rel_pos_embs.shape=[1, num_sentences, pos_emb_dim]
+    # NB: doc_repr.shape=[1, enc_num_hidden*2]
 
     # Replicate the initialized hypothesis for the first step.
-    hyps = [Hypothesis(sent_vecs.shape[2])]
+    hyps = [Hypothesis(
+        [], 0.0, np.zeros_like(sent_vecs[0, :, :]))]  # [1, enc_num_hidden*2]
     results = []
     max_steps = enc_doc_len[0]
 
     for i in xrange(max_steps):
       hyps_len = len(hyps)
-      sent_vec_i = sent_vecs[:, i, :]
+      sent_vec_i = sent_vecs[i, :, :]  # [1, enc_num_hidden*2]
       cur_sent_vec = np.tile(sent_vec_i, (hyps_len, 1))
-      cur_abs_pos = np.tile(abs_pos_embs[:, i, :], (hyps_len, 1))
+      cur_abs_pos = np.tile(abs_pos_embs[i, :, :], (hyps_len, 1))
       cur_rel_pos = np.tile(rel_pos_embs[:, i, :], (hyps_len, 1))
       cur_doc_repr = np.tile(doc_repr, (hyps_len, 1))
       cur_hist_sum = np.concatenate([h.hist_summary for h in hyps], axis=0)
@@ -137,11 +142,11 @@ class BeamSearch(object):
         all_hyps.append(h.extend(0, ext_log_probs[j, 0], sent_vec_i))
         all_hyps.append(h.extend(1, ext_log_probs[j, 1], sent_vec_i))
 
-      hyps = self._BestHyps(all_hyps)[:beam_size]
+      hyps = self._best_hyps(all_hyps)[:beam_size]
 
     return hyps
 
-  def _BestHyps(self, hyps):
+  def _best_hyps(self, hyps):
     """Sort the hyps based on log probs.
 
     Args:
@@ -149,7 +154,6 @@ class BeamSearch(object):
     Returns:
       hyps: A list of sorted hypothesis in reverse log_prob order.
     """
-    # This length normalization is only effective for the final results.
     return sorted(hyps, key=lambda h: h.log_prob, reverse=True)
 
 
@@ -188,7 +192,7 @@ class SummaRuNNerRFDecoder(object):
     bs = BeamSearch(self._model, self._hps)
 
     for next_batch in batch_reader:
-      enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _ = next_batch
+      enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, others = next_batch
 
       for i in xrange(enc_batch.shape[0]):
         enc_batch_i = enc_batch[i:i + 1]
@@ -199,14 +203,19 @@ class SummaRuNNerRFDecoder(object):
         best_beam = bs.beam_search(sess, enc_batch_i, enc_doc_len_i,
                                    enc_sent_len_i, sent_rel_pos_i)[0]
 
-        decode_output = best_beam.extract_ids  #TODO
-        self._DecodeBatch(origin_inputs[i], origin_outputs[i], decode_output)
+        doc_sents = others[0][i].split(sentence_sep)
+        decoded_sents = [doc_sents[x] for x in best_beam.extract_ids]
+        decoded_str = sentence_sep.join(decoded_sents)
+        summary_str = others[1][i]
+
+        result_list.append(" ".join(
+            [sys_tag, decoded_str, ref_tag, summary_str]) + "\n")
 
     # Name output files by number of train steps and time
     decode_dir = FLAGS.decode_dir
     if not os.path.exists(decode_dir):
       os.makedirs(decode_dir)
-    step = model.get_global_step(sess)
+    step = self._model.get_global_step(sess)
     timestep = int(time.time())
     output_fn = os.path.join(decode_dir, 'iter_%d_%d' % (step, timestep))
 
@@ -215,27 +224,6 @@ class SummaRuNNerRFDecoder(object):
     tf.logging.info('Outputs written to %s', output_fn)
 
     return output_fn
-
-  def _DecodeBatch(self, article, abstract, output_ids):
-    """Convert id to words and writing results.
-
-    Args:
-      article: The original article string.
-      abstract: The human (correct) abstract string.
-      output_ids: The abstract word ids output by machine.
-    """
-
-    try:
-      end_idx = output_ids.index(self._vocab.end_id)  # first occurrence
-      output_ids = output_ids[:end_idx]
-    except:
-      pass  # do nothing when end_id is missing in output_ids
-    decoded_output = ' '.join(self._vocab.GetWords(output_ids))
-
-    tf.logging.info('article:  %s', article)
-    tf.logging.info('abstract: %s', abstract)
-    tf.logging.info('decoded:  %s', decoded_output)
-    self._decode_io.Write(abstract, decoded_output.strip())
 
 
 class SummaRuNNerDecoder(object):

@@ -47,6 +47,7 @@ QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
 BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
 GET_TIMEOUT = 240
 SAMPLE_PATIENCE = 10  # Maximum number of sample failures, to avoid infinite loop
+sentence_sep = "</s>"
 
 
 def neg_samp_pairs(sequence, size=0):
@@ -235,10 +236,14 @@ class ExtractiveBatcher(object):
       try:
         summary = data_sample.summary
       except:
-        summary = [""]
+        summary = []
+
+      doc_str = sentence_sep.join(document)
+      summary_str = sentence_sep.join(summary)
+
       element = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
-                                 np_rel_pos, np_target, np_weights, document,
-                                 summary)
+                                 np_rel_pos, np_target, np_weights, doc_str,
+                                 summary_str)
       self._sample_queue.put(element)
 
   def _DataGenerator(self, path, num_epochs=None):

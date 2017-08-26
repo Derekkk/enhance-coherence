@@ -19,6 +19,11 @@ import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
 
+# Import pythonrouge package
+from pythonrouge import PythonROUGE
+ROUGE_dir = "/qydata/ywubw/download/RELEASE-1.5.5"
+sentence_sep = "</s>"
+
 # NB: batch_size could be unspecified (None) in decode mode
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "num_sentences, num_words_sent, rel_pos_max_idx,"
@@ -27,6 +32,26 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "min_num_input_sents, min_num_words_sent,"
                      "max_grad_norm, decay_step, decay_rate,"
                      "trg_weight_norm, train_mode, mlp_num_hidden")
+
+rouge = PythonROUGE(
+    ROUGE_dir,
+    n_gram=2,
+    ROUGE_SU4=False,
+    ROUGE_L=False,
+    stemming=True,
+    stopwords=False,
+    length_limit=False,
+    length=75,
+    word_level=False,
+    use_cf=True,
+    cf=95,
+    ROUGE_W=False,
+    ROUGE_W_Weight=1.2,
+    scoring_formula="average",
+    resampling=False,
+    samples=1000,
+    favor=False,
+    p=0.5)
 
 
 def CreateHParams(flags):
@@ -166,7 +191,7 @@ class SummaRuNNerRF(object):
 
     batch_size_ts = hps.batch_size  # batch size Tensor
     if hps.batch_size is None:
-      batch_size_ts = tf.shape(inputs)[0]
+      batch_size_ts = tf.shape(self._inputs)[0]
 
     with tf.variable_scope("summarunner"):
       with tf.variable_scope("embeddings"):
@@ -462,7 +487,20 @@ class SummaRuNNerRF(object):
     self._loss = loss
 
   def _get_rewards(self, sampled_targets, doc_strs, summary_strs):
-    raise NotImplementedError()
+    doc_list = list(doc_str)
+    summary_list = list(summary_strs)
+
+    doc_sents_list, sum_sents_list = [], []
+    for extracts, doc_str, summary_str in zip(sampled_targets, doc_list,
+                                              summary_list):
+      summary_sents = summary_str.split(sentence_sep)
+      sum_sents_list.append(summary_sents)
+
+      doc_sents = doc_str.split(sentence_sep)
+      extract_sents = [s for e, s in zip(extracts, doc_sents) if e]
+      doc_sents_list.append(extract_sents)
+
+    #TODO: use p.map to run rouge
 
   def _add_train_op(self):
     """Sets self._train_op for training."""
