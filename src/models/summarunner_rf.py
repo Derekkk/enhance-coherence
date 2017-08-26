@@ -18,6 +18,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
+from multiprocessing import Pool
 
 # Import pythonrouge package
 from pythonrouge import PythonROUGE
@@ -54,6 +55,18 @@ rouge = PythonROUGE(
     p=0.5)
 
 
+def compute_rouge(item):
+  system_sents = item[0]
+  reference_sents = item[1]
+
+  rouge_dict = rouge.evaluate(
+      [[system_sents]], [[reference_sents]], to_dict=True, f_measure_only=True)
+  return rouge_dict["ROUGE-2"]
+
+
+pool = Pool(20)
+
+
 def CreateHParams(flags):
   """Create Hyper-parameters from tf.app.flags.FLAGS"""
 
@@ -86,30 +99,6 @@ def CreateHParams(flags):
       decay_rate=flags.decay_rate,
       trg_weight_norm=flags.trg_weight_norm)
   return hps
-
-
-def TrainLoop(model, sess, batcher, valid_batcher, summary_writer, flags):
-  """Runs model training."""
-  step, losses = 0, []
-  while step < flags.max_run_steps:
-    next_batch = batcher.next()
-    summaries, loss, train_step = model.run_train_step(sess, next_batch)
-    losses.append(loss)
-    summary_writer.add_summary(summaries, train_step)
-    step += 1
-
-    # Display current training loss
-    if step % flags.display_freq == 0:
-      avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss", train_step)
-      tf.logging.info("Train step %d: avg_loss %f" % (train_step, avg_loss))
-      losses = []
-      summary_writer.flush()
-
-    # Run evaluation on validation set
-    if step % flags.valid_freq == 0:
-      model.run_valid_steps(sess, valid_batcher, flags.num_valid_batch,
-                            summary_writer)
-      summary_writer.flush()
 
 
 class SummaRuNNerRF(object):
@@ -448,8 +437,10 @@ class SummaRuNNerRF(object):
       else:  # reinforcement learning
         # 1. Compute immediate rewards using a wrapped python function
         rewards, total_rewards = tf.py_func(
-            self._get_rewards,
-            [self._sampled_targets, self._document_strs, self._summary_strs],
+            self._get_rewards, [
+                self._sampled_targets, self._input_doc_lens,
+                self._document_strs, self._summary_strs
+            ],
             Tout=[tf.float32, tf.float32],
             stateful=False,
             name="reward_func")
@@ -486,21 +477,24 @@ class SummaRuNNerRF(object):
     tf.summary.scalar("loss", loss)
     self._loss = loss
 
-  def _get_rewards(self, sampled_targets, doc_strs, summary_strs):
-    doc_list = list(doc_str)
-    summary_list = list(summary_strs)
-
-    doc_sents_list, sum_sents_list = [], []
-    for extracts, doc_str, summary_str in zip(sampled_targets, doc_list,
-                                              summary_list):
-      summary_sents = summary_str.split(sentence_sep)
-      sum_sents_list.append(summary_sents)
-
+  def _get_rewards(self, sampled_targets, doc_lens, doc_strs, summary_strs):
+    ext_sents_list, sum_sents_list = [], []
+    for extracts, doc_str, summary_str in zip(sampled_targets, doc_strs,
+                                              summary_strs):
       doc_sents = doc_str.split(sentence_sep)
       extract_sents = [s for e, s in zip(extracts, doc_sents) if e]
-      doc_sents_list.append(extract_sents)
+      ext_sents_list.append(extract_sents)  # system summary
 
-    #TODO: use p.map to run rouge
+      summary_sents = summary_str.split(sentence_sep)
+      sum_sents_list.append(summary_sents)  # reference summary
+
+    rouge_scores = pool.map(compute_rouge, zip(ext_sents_list, sum_sents_list))
+    np_scores = np.zeros_like(sampled_targets, dtype=np.float32)
+    for i, j in enumerate(doc_lens):
+      np_scores[i, j - 1] = rouge_scores[i]  # index starts with 0
+    np_total_scores = np.array(rouge_scores, dtype=np.float32)
+
+    return np_scores, np_total_scores
 
   def _add_train_op(self):
     """Sets self._train_op for training."""
@@ -526,48 +520,156 @@ class SummaRuNNerRF(object):
 
   def run_train_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _) = batch
+     target_weights, others) = batch
 
-    to_return = [self._train_op, self._summaries, self._loss, self.global_step]
-    results = sess.run(
-        to_return,
-        feed_dict={
-            self._inputs: enc_batch,
-            self._input_sent_lens: enc_sent_lens,
-            self._input_doc_lens: enc_doc_lens,
-            self._input_rel_pos: sent_rel_pos,
-            self._extract_targets: extract_targets,
-            self._target_weights: target_weights
-        })
+    if self._hps.train_mode == "sl":
+      to_return = [
+          self._train_op, self._summaries, self._loss, self.global_step
+      ]
+      results = sess.run(
+          to_return,
+          feed_dict={
+              self._inputs: enc_batch,
+              self._input_sent_lens: enc_sent_lens,
+              self._input_doc_lens: enc_doc_lens,
+              self._input_rel_pos: sent_rel_pos,
+              self._extract_targets: extract_targets,
+              self._target_weights: target_weights
+          })
+    else:
+      to_return = [
+          self._train_op, self._summaries, self._loss, self._avg_reward,
+          self.global_step
+      ]
+      doc_strs, summary_strs = others
+      results = sess.run(
+          to_return,
+          feed_dict={
+              self._inputs: enc_batch,
+              self._input_sent_lens: enc_sent_lens,
+              self._input_doc_lens: enc_doc_lens,
+              self._input_rel_pos: sent_rel_pos,
+              self._document_strs: doc_strs,
+              self._summary_strs: summary_strs
+          })
+
     return results[1:]
 
   def run_eval_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
-     target_weights, _) = batch
+     target_weights, others) = batch
 
-    loss = sess.run(
-        self._loss,
-        feed_dict={
-            self._inputs: enc_batch,
-            self._input_sent_lens: enc_sent_lens,
-            self._input_doc_lens: enc_doc_lens,
-            self._input_rel_pos: sent_rel_pos,
-            self._extract_targets: extract_targets,
-            self._target_weights: target_weights
-        })
-    return loss
+    if self._hps.train_mode == "sl":
+      result = sess.run(
+          self._loss,
+          feed_dict={
+              self._inputs: enc_batch,
+              self._input_sent_lens: enc_sent_lens,
+              self._input_doc_lens: enc_doc_lens,
+              self._input_rel_pos: sent_rel_pos,
+              self._extract_targets: extract_targets,
+              self._target_weights: target_weights
+          })
+    else:
+      doc_strs, summary_strs = others
+      result = sess.run(
+          [self._loss, self._avg_reward],
+          feed_dict={
+              self._inputs: enc_batch,
+              self._input_sent_lens: enc_sent_lens,
+              self._input_doc_lens: enc_doc_lens,
+              self._input_rel_pos: sent_rel_pos,
+              self._document_strs: doc_strs,
+              self._summary_strs: summary_strs
+          })
 
-  def run_valid_steps(self, sess, data_batcher, num_valid_batch,
-                      summary_writer):
-    losses = []
-    for _ in xrange(num_valid_batch):
-      next_batch = data_batcher.next()
-      loss = self.run_eval_step(sess, next_batch)
+    return result
+
+  def train_loop_sl(self, sess, batcher, valid_batcher, summary_writer, flags):
+    """Runs model training."""
+    step, losses = 0, []
+    while step < flags.max_run_steps:
+      next_batch = batcher.next()
+      summaries, loss, train_step = self.run_train_step(sess, next_batch)
+
       losses.append(loss)
+      summary_writer.add_summary(summaries, train_step)
+      step += 1
 
-    step = self.get_global_step(sess)
-    valid_loss = lib.compute_avg(losses, summary_writer, "valid_loss", step)
-    tf.logging.info("\tValid step %d: avg_loss %f" % (step, valid_loss))
+      # Display current training loss
+      if step % flags.display_freq == 0:
+        avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss",
+                                   train_step)
+        tf.logging.info("Train step %d: avg_loss %f" % (train_step, avg_loss))
+        losses = []
+        summary_writer.flush()
+
+      # Run evaluation on validation set
+      if step % flags.valid_freq == 0:
+        valid_losses = []
+        for _ in xrange(flags.num_valid_batch):
+          next_batch = valid_batcher.next()
+          valid_loss = self.run_eval_step(sess, next_batch)
+          valid_losses.append(valid_loss)
+
+        gstep = self.get_global_step(sess)
+        avg_valid_loss = lib.compute_avg(valid_losses, summary_writer,
+                                         "valid_loss", gstep)
+        tf.logging.info("\tValid step %d: avg_loss %f" % (gstep,
+                                                          avg_valid_loss))
+
+        summary_writer.flush()
+
+  def train_loop_rl(self, sess, batcher, valid_batcher, summary_writer, flags):
+    """Runs model training."""
+    step, losses, rewards = 0, [], []
+    while step < flags.max_run_steps:
+      next_batch = batcher.next()
+      summaries, loss, reward, train_step = self.run_train_step(
+          sess, next_batch)
+
+      losses.append(loss)
+      rewards.append(reward)
+      summary_writer.add_summary(summaries, train_step)
+      step += 1
+
+      # Display current training loss
+      if step % flags.display_freq == 0:
+        avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss",
+                                   train_step)
+        avg_reward = lib.compute_avg(rewards, summary_writer, "avg_reward",
+                                     train_step)
+
+        tf.logging.info("Train step %d: avg_loss %f avg_reward %f" %
+                        (train_step, avg_loss, avg_reward))
+        losses, rewards = [], []
+        summary_writer.flush()
+
+      # Run evaluation on validation set
+      if step % flags.valid_freq == 0:
+        valid_losses, valid_rewards = [], []
+        for _ in xrange(flags.num_valid_batch):
+          next_batch = valid_batcher.next()
+          valid_loss, valid_reward = self.run_eval_step(sess, next_batch)
+          valid_losses.append(valid_loss)
+          valid_rewards.append(valid_reward)
+
+        gstep = self.get_global_step(sess)
+        avg_valid_loss = lib.compute_avg(valid_losses, summary_writer,
+                                         "valid_loss", gstep)
+        avg_valid_reward = lib.compute_avg(valid_rewards, summary_writer,
+                                           "valid_reward", gstep)
+
+        tf.logging.info("\tValid step %d: avg_loss %f avg_reward %f" %
+                        (gstep, avg_valid_loss, avg_valid_reward))
+
+        summary_writer.flush()
+
+  def train_loop(self, sess, batcher, valid_batcher, summary_writer, flags):
+    if self._hps.train_mode == "sl":
+      self.train_loop_sl(sess, batcher, valid_batcher, summary_writer, flags)
+    else:
+      self.train_loop_rl(sess, batcher, valid_batcher, summary_writer, flags)
 
   def decode_get_feats(self, sess, enc_batch, enc_doc_lens, enc_sent_lens,
                        sent_rel_pos):

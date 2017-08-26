@@ -301,11 +301,13 @@ class ExtractiveBatcher(object):
       origin_outputs.append(ex.origin_output)
 
     stacked_fields = [np.stack(field, axis=0) for field in field_lists]
+    np_origin_inputs = np.array(origin_inputs, dtype=np.str)
+    np_origin_outputs = np.array(origin_outputs, dtype=np.str)
 
     return ExtractiveBatch(stacked_fields[0], stacked_fields[1],
                            stacked_fields[2], stacked_fields[3],
                            stacked_fields[4], stacked_fields[5],\
-                           (origin_inputs, origin_outputs))
+                           (np_origin_inputs, np_origin_outputs))
 
   def _WatchThreads(self):
     """Watch the daemon input threads and restart if dead."""

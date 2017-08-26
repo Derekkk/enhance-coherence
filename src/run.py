@@ -103,7 +103,7 @@ DocSummary = namedtuple('DocSummary',
 #                              'url document extract_ids count')
 
 
-def _Train(model, data_batcher, valid_batcher, train_loop):
+def Train(model, data_batcher, valid_batcher):
   """Runs model training."""
   with tf.device("/gpu:0"):  # GPU by default
     restorer = model.build_graph()
@@ -141,7 +141,7 @@ def _Train(model, data_batcher, valid_batcher, train_loop):
   summary_writer = tf.summary.FileWriter(FLAGS.summary_dir)
 
   # Start the training loop
-  train_loop(model, sess, data_batcher, valid_batcher, summary_writer, FLAGS)
+  model.train_loop(sess, data_batcher, valid_batcher, summary_writer, FLAGS)
 
   sv.Stop()
 
@@ -153,13 +153,13 @@ def main():
   # Import model
   model_type = FLAGS.model
   if model_type == "summarunner":
-    from models.summarunner import CreateHParams, TrainLoop
+    from models.summarunner import CreateHParams, TrainLoop  #TODO
     from models.summarunner import SummaRuNNer as Model
   if model_type == "summarunner_rf":
-    from models.summarunner_rf import CreateHParams, TrainLoop
+    from models.summarunner_rf import CreateHParams
     from models.summarunner_rf import SummaRuNNerRF as Model
   elif model_type == "seqmatch":
-    from models.seqmatch import CreateHParams, TrainLoop
+    from models.seqmatch import CreateHParams, TrainLoop  #TODO
     from models.seqmatch import SeqMatchNet as Model
   else:
     raise ValueError("%s model NOT defined." % model_type)
@@ -175,6 +175,7 @@ def main():
   if FLAGS.mode == "train":
     num_epochs = None  # infinite loop
     shuffle_batches = True
+    batcher_hps = hps
   else:
     num_epochs = 1  # only go through test set once
     shuffle_batches = False  # do not shuffle the batches
@@ -225,7 +226,7 @@ def main():
 
   if FLAGS.mode == "train":
     model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
-    _Train(model, batcher, valid_batcher, TrainLoop)  # start training
+    Train(model, batcher, valid_batcher)  # start training
   elif FLAGS.mode == "decode":
     if model_type == "summarunner":
       from utils.decode import SummaRuNNerDecoder
