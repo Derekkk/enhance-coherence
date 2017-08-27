@@ -1,11 +1,11 @@
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=1
 python run.py \
   --model=summarunner_rf \
   --data_path=data/cnndaily/training_shuf.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex09 \
-  --summary_dir=log/cnndaily/summar/ex09 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex11 \
+  --summary_dir=log/cnndaily/summar/ex11 \
   --mode=train \
   --train_mode=rl \
   --lr 0.15 \
@@ -13,11 +13,12 @@ python run.py \
   --decay_step 30000 \
   --decay_rate 0.98 \
   --dropout 0.0 \
-  --batch_size 64 \
+  --batch_size 32 \
   --max_run_steps 200000 \
   --display_freq 100 \
   --valid_path=data/cnndaily/validation_shuf.pkl \
   --valid_freq 1000 \
+  --num_valid_batch 60 \
   --checkpoint_secs 1200 \
   --use_bucketing False \
   --truncate_input True \

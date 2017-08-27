@@ -153,13 +153,13 @@ def main():
   # Import model
   model_type = FLAGS.model
   if model_type == "summarunner":
-    from models.summarunner import CreateHParams, TrainLoop  #TODO
+    from models.summarunner import CreateHParams, TrainLoop  #TODO: update API
     from models.summarunner import SummaRuNNer as Model
   if model_type == "summarunner_rf":
     from models.summarunner_rf import CreateHParams
     from models.summarunner_rf import SummaRuNNerRF as Model
   elif model_type == "seqmatch":
-    from models.seqmatch import CreateHParams, TrainLoop  #TODO
+    from models.seqmatch import CreateHParams, TrainLoop  #TODO: update API
     from models.seqmatch import SeqMatchNet as Model
   else:
     raise ValueError("%s model NOT defined." % model_type)
@@ -238,8 +238,11 @@ def main():
     elif model_type == "summarunner_rf":
       from utils.decode import SummaRuNNerRFDecoder
       model = Model(
-          hps._replace(batch_size=None), input_vocab, num_gpus=FLAGS.num_gpus)
-      decoder = SummaRuNNerRFDecoder(model, hps)
+          hps._replace(batch_size=None),  # to allow variable batch_size
+          input_vocab,
+          num_gpus=FLAGS.num_gpus)
+      decoder = SummaRuNNerRFDecoder(
+          model, beam_size=hps.batch_size)  # use batch_size as beam_size
       output_fn = decoder.Decode(batcher)
       evaluate.eval_rouge(output_fn)
     else:

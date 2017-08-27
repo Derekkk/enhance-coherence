@@ -77,15 +77,15 @@ class Hypothesis(object):
 class BeamSearch(object):
   """Beam search."""
 
-  def __init__(self, model, hps):
+  def __init__(self, model, beam_size):
     """Creates BeamSearch object.
 
     Args:
       model: SummaRuNNerRF model.
-      hps: hyperparamters
+      beam_size: int.
     """
     self._model = model
-    self._hps = hps
+    self._beam_size = beam_size
 
   def beam_search(self, sess, enc_input, enc_doc_len, enc_sent_len,
                   sent_rel_pos):
@@ -100,7 +100,7 @@ class BeamSearch(object):
       hyps: list of Hypothesis, the best hypotheses found by beam search,
           ordered by score
     """
-    beam_size = self._hps.batch_size  # NB: use batch_size as beam size
+    beam_size = self._beam_size
     model = self._model
 
     # # Repeat the inputs by beam_size times
@@ -160,16 +160,16 @@ class BeamSearch(object):
 class SummaRuNNerRFDecoder(object):
   """Beam search decoder for SummaRuNNerRF."""
 
-  def __init__(self, model, hps):
+  def __init__(self, model, beam_size):
     """Beam search decoding.
 
     Args:
       model: the SummaRuNNerRF model.
-      hps: hyperparamters.
+      beam_size: int.
     """
     self._model = model
     self._model.build_graph()
-    self._hps = hps
+    self._beam_size = beam_size
 
   def Decode(self, batch_reader):
     """Decoding loop for long running process."""
@@ -189,7 +189,7 @@ class SummaRuNNerRFDecoder(object):
     saver.restore(sess, ckpt_path)
 
     result_list = []
-    bs = BeamSearch(self._model, self._hps)
+    bs = BeamSearch(self._model, self._beam_size)
 
     for next_batch in batch_reader:
       enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, others = next_batch

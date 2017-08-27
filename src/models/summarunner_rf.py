@@ -38,7 +38,7 @@ rouge = PythonROUGE(
     ROUGE_dir,
     n_gram=2,
     ROUGE_SU4=False,
-    ROUGE_L=False,
+    ROUGE_L=True,
     stemming=True,
     stopwords=False,
     length_limit=False,
@@ -61,7 +61,9 @@ def compute_rouge(item):
 
   rouge_dict = rouge.evaluate(
       [[system_sents]], [[reference_sents]], to_dict=True, f_measure_only=True)
-  return rouge_dict["ROUGE-2"]
+  weighted_rouge = (rouge_dict["ROUGE-1"] * 0.4 + rouge_dict["ROUGE-2"] +
+                    rouge_dict["ROUGE-L"] * 0.5) / 3.0
+  return weighted_rouge
 
 
 pool = Pool(20)

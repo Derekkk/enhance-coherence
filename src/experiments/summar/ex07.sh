@@ -13,7 +13,7 @@ python run.py \
   --decay_step 30000 \
   --decay_rate 0.98 \
   --dropout 0.0 \
-  --batch_size 32 \
+  --batch_size 64 \
   --max_run_steps 200000 \
   --display_freq 100 \
   --valid_path=data/cnndaily/validation_shuf.pkl \
