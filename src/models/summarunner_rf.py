@@ -32,7 +32,7 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "doc_repr_dim, word_conv_k_sizes, word_conv_filter,"
                      "min_num_input_sents, min_num_words_sent,"
                      "max_grad_norm, decay_step, decay_rate,"
-                     "trg_weight_norm, train_mode, mlp_num_hidden")
+                     "trg_weight_norm, train_mode, mlp_num_hidden, rl_coef")
 
 rouge = PythonROUGE(
     ROUGE_dir,
@@ -66,7 +66,7 @@ def compute_rouge(item):
   return weighted_rouge
 
 
-pool = Pool(20)
+# pool = Pool(20)
 
 
 def CreateHParams(flags):
@@ -74,7 +74,7 @@ def CreateHParams(flags):
 
   word_conv_k_sizes = [str(n) for n in flags.word_conv_k_sizes.split(",")]
   assert flags.mode in ["train", "decode"], "Invalid mode."
-  assert flags.train_mode in ["sl", "rl"], "Invalid train_mode."
+  assert flags.train_mode in ["sl", "rl", "sl+rl"], "Invalid train_mode."
 
   hps = HParams(
       mode=flags.mode,  # train, eval, decode
@@ -99,7 +99,8 @@ def CreateHParams(flags):
       max_grad_norm=flags.max_grad_norm,
       decay_step=flags.decay_step,
       decay_rate=flags.decay_rate,
-      trg_weight_norm=flags.trg_weight_norm)
+      trg_weight_norm=flags.trg_weight_norm,
+      rl_coef=flags.rl_coef)
   return hps
 
 
@@ -132,6 +133,8 @@ class SummaRuNNerRF(object):
     if self._hps.mode == "train":
       self._add_loss()
       self._add_train_op()
+      if self._hps.train_mode == "rl":
+        self._pool = Pool(15)
 
     self._summaries = tf.summary.merge_all()
 
@@ -249,8 +252,8 @@ class SummaRuNNerRF(object):
             cur_abs_pos = abs_pos_emb_list[i]
             cur_rel_pos = rel_pos_emb_list[i]
 
-            if i > 0:
-              tf.get_variable_scope().reuse_variables()  # NB: this is important!
+            if i > 0:  # NB: reusing is important!
+              tf.get_variable_scope().reuse_variables()
 
             extract_logit = self._compute_extract_prob(
                 cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
@@ -427,7 +430,7 @@ class SummaRuNNerRF(object):
           self._input_doc_lens, maxlen=hps.num_sentences,
           dtype=tf.float32)  # [batch_size, num_sentences]
 
-      if hps.train_mode == "sl":  # supervised learning
+      if hps.train_mode in ["sl", "sl+rl"]:  # supervised learning
         xe_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=self._extract_targets,
             logits=self._extract_logits,
@@ -436,7 +439,9 @@ class SummaRuNNerRF(object):
         batch_loss = tf.div(
             tf.reduce_sum(xe_loss * self._target_weights * loss_mask, 1),
             tf.to_float(self._input_doc_lens))
-      else:  # reinforcement learning
+        loss = tf.reduce_mean(batch_loss)
+
+      if hps.train_mode in ["rl", "sl+rl"]:  # reinforcement learning
         # 1. Compute immediate rewards using a wrapped python function
         rewards, total_rewards = tf.py_func(
             self._get_rewards, [
@@ -475,7 +480,11 @@ class SummaRuNNerRF(object):
             tf.reduce_sum(neg_log_probs * returns * loss_mask, 1),
             tf.to_float(self._input_doc_lens))
 
-      loss = tf.reduce_mean(batch_loss)
+        if hps.train_mode == "rl":
+          loss = tf.reduce_mean(batch_loss)
+        else:
+          loss += hps.rl_coef * tf.reduce_mean(batch_loss)
+
     tf.summary.scalar("loss", loss)
     self._loss = loss
 
@@ -490,7 +499,8 @@ class SummaRuNNerRF(object):
       summary_sents = summary_str.split(sentence_sep)
       sum_sents_list.append(summary_sents)  # reference summary
 
-    rouge_scores = pool.map(compute_rouge, zip(ext_sents_list, sum_sents_list))
+    rouge_scores = self._pool.map(compute_rouge,
+                                  zip(ext_sents_list, sum_sents_list))
     np_scores = np.zeros_like(sampled_targets, dtype=np.float32)
     for i, j in enumerate(doc_lens):
       np_scores[i, j - 1] = rouge_scores[i]  # index starts with 0
@@ -538,12 +548,13 @@ class SummaRuNNerRF(object):
               self._extract_targets: extract_targets,
               self._target_weights: target_weights
           })
-    else:
+    else:  # rl or sl+rl
       to_return = [
           self._train_op, self._summaries, self._loss, self._avg_reward,
           self.global_step
       ]
       doc_strs, summary_strs = others
+
       results = sess.run(
           to_return,
           feed_dict={
@@ -551,6 +562,8 @@ class SummaRuNNerRF(object):
               self._input_sent_lens: enc_sent_lens,
               self._input_doc_lens: enc_doc_lens,
               self._input_rel_pos: sent_rel_pos,
+              self._extract_targets: extract_targets,
+              self._target_weights: target_weights,
               self._document_strs: doc_strs,
               self._summary_strs: summary_strs
           })
@@ -572,7 +585,7 @@ class SummaRuNNerRF(object):
               self._extract_targets: extract_targets,
               self._target_weights: target_weights
           })
-    else:
+    else:  # rl or sl+rl
       doc_strs, summary_strs = others
       result = sess.run(
           [self._loss, self._avg_reward],
@@ -581,6 +594,8 @@ class SummaRuNNerRF(object):
               self._input_sent_lens: enc_sent_lens,
               self._input_doc_lens: enc_doc_lens,
               self._input_rel_pos: sent_rel_pos,
+              self._extract_targets: extract_targets,
+              self._target_weights: target_weights,
               self._document_strs: doc_strs,
               self._summary_strs: summary_strs
           })
@@ -670,7 +685,7 @@ class SummaRuNNerRF(object):
   def train_loop(self, sess, batcher, valid_batcher, summary_writer, flags):
     if self._hps.train_mode == "sl":
       self.train_loop_sl(sess, batcher, valid_batcher, summary_writer, flags)
-    else:
+    else:  # rl or sl+rl
       self.train_loop_rl(sess, batcher, valid_batcher, summary_writer, flags)
 
   def decode_get_feats(self, sess, enc_batch, enc_doc_lens, enc_sent_lens,

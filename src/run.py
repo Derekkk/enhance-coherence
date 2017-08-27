@@ -86,6 +86,8 @@ tf.app.flags.DEFINE_string("train_mode", "sl",
                            "Kernel sizes of word-level CNN.")
 tf.app.flags.DEFINE_string("mlp_num_hidden", "256",
                            "Kernel sizes of word-level CNN.")
+tf.app.flags.DEFINE_float("rl_coef", 1.0,
+                          "Coefficient for RL loss in SL+RL mode.")
 # ----------- seqmatch related flags ----------------
 tf.app.flags.DEFINE_integer("num_hidden", 256,
                             "Number of hidden units in encoder RNN.")
@@ -96,7 +98,7 @@ tf.app.flags.DEFINE_string("maxpool_width", 2, "Width of max-pooling.")
 # ----------- coherence related flags ----------------
 tf.app.flags.DEFINE_integer("max_num_sents", 6, "Maximum number of sentences.")
 tf.app.flags.DEFINE_integer("gru_num_hidden", "256",
-                           "Number of hidden units in the GRU.")
+                            "Number of hidden units in the GRU.")
 tf.app.flags.DEFINE_string("conv_heights", "3", "Height of convolution kernel.")
 tf.app.flags.DEFINE_string("conv_widths", "3", "Width of convolution kernel.")
 tf.app.flags.DEFINE_string("maxpool_widths", "2", "Width of max-pooling.")
