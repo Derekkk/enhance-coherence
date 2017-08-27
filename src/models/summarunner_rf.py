@@ -236,49 +236,60 @@ class SummaRuNNerRF(object):
           tf.device(self._device_0):
 
         if hps.mode == "train":  # train mode
-          # Initialize the representation of all historical summaries extracted
-          hist_summary = tf.zeros_like(sentence_vecs_list[0])
-          extract_logit_list, extract_prob_list = [], []
+          if hps.train_mode in ["sl", "sl+rl"]:
+            hist_summary = tf.zeros_like(sentence_vecs_list[0])
+            extract_logit_list, extract_prob_list = [], []
 
-          if hps.train_mode == "sl":
             targets = tf.unstack(
                 tf.to_float(self._extract_targets),
                 axis=1)  # [batch_size] * num_sentences
-          else:
-            sampled_target_list = []
 
-          for i in xrange(hps.num_sentences):
-            cur_sent_vec = sentence_vecs_list[i]
-            cur_abs_pos = abs_pos_emb_list[i]
-            cur_rel_pos = rel_pos_emb_list[i]
+            for i in xrange(hps.num_sentences):
+              cur_sent_vec = sentence_vecs_list[i]
+              cur_abs_pos = abs_pos_emb_list[i]
+              cur_rel_pos = rel_pos_emb_list[i]
 
-            if i > 0:  # NB: reusing is important!
-              tf.get_variable_scope().reuse_variables()
+              if i > 0:  # NB: reusing is important!
+                tf.get_variable_scope().reuse_variables()
 
-            extract_logit = self._compute_extract_prob(
-                cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
-                hist_summary)  # [batch_size, 2]
-            extract_logit_list.append(extract_logit)
-            extract_prob = tf.nn.softmax(extract_logit)  # [batch_size, 2]
-            extract_prob_list.append(extract_prob)
+              extract_logit = self._compute_extract_prob(
+                  cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
+                  hist_summary)  # [batch_size, 2]
+              extract_logit_list.append(extract_logit)
+              extract_prob = tf.nn.softmax(extract_logit)  # [batch_size, 2]
+              extract_prob_list.append(extract_prob)
 
-            if hps.train_mode == "sl":
               target = tf.expand_dims(targets[i], 1)  # [batch_size, 1] float32
               hist_summary += target * cur_sent_vec  #[batch_size, enc_num_hidden*2]
-            else:
+
+            self._extract_logits = tf.stack(
+                extract_logit_list, axis=1)  # [batch_size, num_sentences, 2]
+            self._extract_probs = tf.stack(
+                extract_prob_list, axis=1)  # [batch_size, num_sentences, 2]
+
+          if hps.train_mode in ["rl", "sl+rl"]:
+            hist_summary_rl = tf.zeros_like(sentence_vecs_list[0])
+            sampled_target_list = []
+
+            for i in xrange(hps.num_sentences):
+              cur_sent_vec = sentence_vecs_list[i]
+              cur_abs_pos = abs_pos_emb_list[i]
+              cur_rel_pos = rel_pos_emb_list[i]
+
+              if i > 0:  # NB: reusing is important!
+                tf.get_variable_scope().reuse_variables()
+
+              extract_logit = self._compute_extract_prob(
+                  cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
+                  hist_summary_rl)  # [batch_size, 2]
+
               sampled_target = tf.multinomial(
                   logits=extract_logit, num_samples=1)  # [batch_size, 1] int32
               sampled_target_list.append(sampled_target)
-              hist_summary += tf.to_float(
+              hist_summary_rl += tf.to_float(
                   sampled_target
               ) * cur_sent_vec  # [batch_size, enc_num_hidden*2]
 
-          self._extract_logits = tf.stack(
-              extract_logit_list, axis=1)  # [batch_size, num_sentences, 2]
-          self._extract_probs = tf.stack(
-              extract_prob_list, axis=1)  # [batch_size, num_sentences, 2]
-
-          if hps.train_mode == "rl":
             self._sampled_targets = tf.concat(
                 sampled_target_list,
                 axis=1)  # [batch_size, num_sentences] int32
