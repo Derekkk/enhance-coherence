@@ -93,6 +93,15 @@ tf.app.flags.DEFINE_integer("max_sent_len", 50, "Maximum length of sentences.")
 tf.app.flags.DEFINE_string("conv_filters", 256, "Number of filters in the CNN.")
 tf.app.flags.DEFINE_string("conv_width", 3, "Width of convolution kernel.")
 tf.app.flags.DEFINE_string("maxpool_width", 2, "Width of max-pooling.")
+# ----------- coherence related flags ----------------
+tf.app.flags.DEFINE_integer("max_num_sents", 6, "Maximum number of sentences.")
+tf.app.flags.DEFINE_integer("gru_num_hidden", "256",
+                           "Number of hidden units in the GRU.")
+tf.app.flags.DEFINE_string("conv_heights", "3", "Height of convolution kernel.")
+tf.app.flags.DEFINE_string("conv_widths", "3", "Width of convolution kernel.")
+tf.app.flags.DEFINE_string("maxpool_widths", "2", "Width of max-pooling.")
+tf.app.flags.DEFINE_string("fc_num_hiddens", "256,128",
+                           "Number of hidden units in the final FC layers.")
 
 # DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
 
@@ -161,6 +170,9 @@ def main():
   elif model_type == "seqmatch":
     from models.seqmatch import CreateHParams, TrainLoop  #TODO: update API
     from models.seqmatch import SeqMatchNet as Model
+  elif model_type == "coherence":
+    from models.coherence import CreateHParams
+    from models.coherence import CoherenceModel as Model
   else:
     raise ValueError("%s model NOT defined." % model_type)
   tf.logging.info("Using model %s." % model_type.upper())
@@ -202,6 +214,7 @@ def main():
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
           shuffle_batches=shuffle_batches)
+
   elif model_type == "seqmatch":
     batcher = batch_reader.SentencePairBatcher(
         FLAGS.data_path,
@@ -221,6 +234,27 @@ def main():
           truncate_input=FLAGS.truncate_input,
           num_epochs=num_epochs,
           shuffle_batches=shuffle_batches)
+
+  elif model_type == "coherence":
+    batcher = batch_reader.SentenceBlockBatcher(
+        FLAGS.data_path,
+        input_vocab,
+        batcher_hps,
+        bucketing=FLAGS.use_bucketing,
+        truncate_input=FLAGS.truncate_input,
+        num_epochs=num_epochs,
+        shuffle_batches=shuffle_batches)
+    if FLAGS.mode == "train":
+      # Create validation data reader
+      valid_batcher = batch_reader.SentenceBlockBatcher(
+          FLAGS.valid_path,
+          input_vocab,
+          batcher_hps,
+          bucketing=FLAGS.use_bucketing,
+          truncate_input=FLAGS.truncate_input,
+          num_epochs=num_epochs,
+          shuffle_batches=shuffle_batches)
+
   else:
     raise NotImplementedError()
 

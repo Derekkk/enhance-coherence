@@ -41,6 +41,10 @@ SentencePairBatch = namedtuple('SentencePairBatch',
                                'sents_A, sents_B, lengths_A, lengths_B,'
                                'labels')
 
+SentenceBlock = namedtuple('SentenceBlock', 'sent_input, length, label')
+SentenceBlockBatch = namedtuple('SentenceBlockBatch',
+                                'sent_inputs, lengths, labels')
+
 # Note(jimmycode): refer to run.py for definition of DocSummary, DocSummaryCount
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
@@ -451,3 +455,97 @@ class SentencePairBatcher(ExtractiveBatcher):
     return SentencePairBatch(stacked_fields[0], stacked_fields[1],
                              stacked_fields[2], stacked_fields[3],
                              stacked_fields[4])
+
+
+class SentenceBlockBatcher(SentencePairBatcher):
+  """Batch reader for sequence matching model."""
+
+  def _FillInputQueue(self, data_path):
+    """Fill input queue with ExtractiveSample."""
+    hps = self._hps
+    enc_vocab = self._enc_vocab
+    enc_pad_id = enc_vocab.pad_id
+    max_num_sents = hps.max_num_sents
+    max_sent_len = hps.max_sent_len
+    pad_sent = [enc_pad_id] * max_sent_len
+    data_generator = self._DataGenerator(data_path, self._num_epochs)
+
+    # pdb.set_trace()
+    for data_sample in data_generator:  # type(data_sample): DocSummary
+      document = data_sample.document
+      summary = data_sample.summary
+      if not summary:
+        continue
+
+      # Sample negative blocks
+      if len(summary) > max_num_sents:
+        if self._truncate_input:
+          summary = summary[:max_num_sents]
+        else:
+          continue
+      summary_len = len(summary)
+
+      negative_blocks = []
+      if summary_len > 1:
+        # 1. Wrong order
+        while True:
+          neg_1 = random.sample(summary, summary_len)
+          if neg_1 != summary:
+            break
+
+        # 2. Remove one sentence
+        del_idx = randint(0, summary_len - 1)
+        neg_2 = [s for i, s in enumerate(summary) if i != del_idx]
+        negative_blocks += [neg_1, neg_2]
+
+      # 3. Replace one sentence
+      rep_idx = randint(0, summary_len - 1)
+      neg_3 = summary[:]
+      neg_3[rep_idx] = random.choice(document)
+
+      # 4. Random permutation from document
+      neg_4 = random.sample(document, min(summary_len, len(document)))
+      negative_blocks += [neg_3, neg_4]
+      negative_blocks = random.sample(negative_blocks, 2)
+
+      # Combine them with labels, 1 for positive, 0 for negative
+      all_blocks = [(summary, 1)]  # positive sample (1/3)
+      for b in negative_blocks:  # negative samples (2/3)
+        all_blocks.append((b, 0))
+      shuffle(all_blocks)
+
+      # Convert format and add to queue
+      for sentences, label in all_blocks:
+        # pdb.set_trace()
+        sent_ids = [enc_vocab.GetIds(s) for s in sentences]
+        sent_ids = [x[:max_sent_len] for x in sent_ids]  # truncate inputs
+        sent_lens = [len(x)
+                     for x in sent_ids] + [0] * (max_num_sents - len(sent_ids))
+
+        for ids in sent_ids:
+          ids += [enc_pad_id] * (max_sent_len - len(ids))
+        sent_ids += [pad_sent] * (max_num_sents - len(sent_ids))
+
+        np_sent_input = np.array(sent_ids, dtype=np.int32)
+        np_length = np.array(sent_lens, dtype=np.int32)
+
+        element = SentenceBlock(np_sent_input, np_length, label)
+        self._sample_queue.put(element)
+
+  def _PackBatch(self, batch):
+    """ Pack the batch into numpy arrays.
+
+    Returns:
+        model_batch: ExtractiveBatch
+    """
+    hps = self._hps
+    field_lists = [[], [], []]
+
+    for ex in batch:
+      for i in range(3):
+        field_lists[i].append(ex[i])
+
+    stacked_fields = [np.stack(field, axis=0) for field in field_lists]
+
+    return SentenceBlockBatch(stacked_fields[0], stacked_fields[1],
+                              stacked_fields[2])

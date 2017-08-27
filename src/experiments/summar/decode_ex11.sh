@@ -4,7 +4,7 @@ python run.py \
   --data_path=data/cnndaily/test.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex09 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex11 \
   --mode=decode \
   --train_mode=rl \
   --dropout 0.0 \
@@ -22,5 +22,5 @@ python run.py \
   --word_conv_k_sizes '3,5,7' \
   --word_conv_filter 128 \
   --mlp_num_hidden '512,256' \
-  --decode_dir=out/cnndaily/summar/ex09 \
+  --decode_dir=out/cnndaily/summar/ex11 \
   
