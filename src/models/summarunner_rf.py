@@ -133,7 +133,7 @@ class SummaRuNNerRF(object):
     if self._hps.mode == "train":
       self._add_loss()
       self._add_train_op()
-      if self._hps.train_mode == "rl":
+      if self._hps.train_mode in ["rl", "sl+rl"]:
         self._pool = Pool(15)
 
     self._summaries = tf.summary.merge_all()
@@ -269,7 +269,7 @@ class SummaRuNNerRF(object):
 
           if hps.train_mode in ["rl", "sl+rl"]:
             hist_summary_rl = tf.zeros_like(sentence_vecs_list[0])
-            sampled_target_list = []
+            extract_logit_rl_list, sampled_target_list = [], []
 
             for i in xrange(hps.num_sentences):
               cur_sent_vec = sentence_vecs_list[i]
@@ -279,9 +279,10 @@ class SummaRuNNerRF(object):
               if i > 0:  # NB: reusing is important!
                 tf.get_variable_scope().reuse_variables()
 
-              extract_logit = self._compute_extract_prob(
+              extract_rl_logit = self._compute_extract_prob(
                   cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
                   hist_summary_rl)  # [batch_size, 2]
+              extract_logit_rl_list.append(extract_rl_logit)
 
               sampled_target = tf.multinomial(
                   logits=extract_logit, num_samples=1)  # [batch_size, 1] int32
@@ -290,6 +291,8 @@ class SummaRuNNerRF(object):
                   sampled_target
               ) * cur_sent_vec  # [batch_size, enc_num_hidden*2]
 
+            self._extract_logits_rl = tf.stack(
+                extract_logit_rl_list, axis=1)  # [batch_size, num_sentences, 2]
             self._sampled_targets = tf.concat(
                 sampled_target_list,
                 axis=1)  # [batch_size, num_sentences] int32
@@ -483,7 +486,7 @@ class SummaRuNNerRF(object):
         # 3. Compute the negative log-likelihood of chosen actions
         neg_log_probs = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=self._sampled_targets,
-            logits=self._extract_logits,
+            logits=self._extract_logits_rl,
             name="rl_neg_log_prob")  # [batch_size, num_sentences]
 
         # 4. Compute the policy loss

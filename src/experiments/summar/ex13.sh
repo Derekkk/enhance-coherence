@@ -4,15 +4,15 @@ python run.py \
   --data_path=data/cnndaily/training_shuf.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex12 \
-  --summary_dir=log/cnndaily/summar/ex12 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex13 \
+  --summary_dir=log/cnndaily/summar/ex13 \
   --mode=train \
   --train_mode='sl+rl' \
-  --rl_coef 2.0 \
-  --lr 0.5 \
+  --rl_coef 1.0 \
+  --lr 0.3 \
   --min_lr 0.01 \
   --decay_step 30000 \
-  --decay_rate 0.98 \
+  --decay_rate 0.96 \
   --dropout 0.0 \
   --batch_size 32 \
   --max_run_steps 200000 \
