@@ -19,6 +19,8 @@ import tensorflow as tf
 from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
 
+FLAGS = tf.app.flags.FLAGS
+
 # NB: batch_size is not given (None) when deployed as a critic.
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "max_num_sents, max_sent_len, emb_dim, gru_num_hidden,"
@@ -26,26 +28,26 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "fc_num_hiddens, max_grad_norm, decay_step, decay_rate")
 
 
-def CreateHParams(flags):
+def CreateHParams():
   """Create Hyper-parameters from tf.app.flags.FLAGS"""
   hps = HParams(
-      mode=flags.mode,  # train, eval, decode
-      lr=flags.lr,
-      min_lr=flags.min_lr,
-      dropout=flags.dropout,
-      batch_size=flags.batch_size,
-      max_num_sents=flags.max_num_sents,
-      max_sent_len=flags.max_sent_len,
-      emb_dim=flags.emb_dim,
-      gru_num_hidden=flags.gru_num_hidden,
-      conv_filters=lib.parse_list_str(flags.conv_filters),
-      conv_heights=lib.parse_list_str(flags.conv_heights),
-      conv_widths=lib.parse_list_str(flags.conv_widths),
-      maxpool_widths=lib.parse_list_str(flags.maxpool_widths),
-      fc_num_hiddens=lib.parse_list_str(flags.fc_num_hiddens),
-      max_grad_norm=flags.max_grad_norm,
-      decay_step=flags.decay_step,
-      decay_rate=flags.decay_rate)
+      mode=FLAGS.mode,  # train, eval, decode
+      lr=FLAGS.lr,
+      min_lr=FLAGS.min_lr,
+      dropout=FLAGS.dropout,
+      batch_size=FLAGS.batch_size,
+      max_num_sents=FLAGS.max_num_sents,
+      max_sent_len=FLAGS.max_sent_len,
+      emb_dim=FLAGS.coh_emb_dim,
+      gru_num_hidden=FLAGS.gru_num_hidden,
+      conv_filters=lib.parse_list_str(FLAGS.conv_filters),
+      conv_heights=lib.parse_list_str(FLAGS.conv_heights),
+      conv_widths=lib.parse_list_str(FLAGS.conv_widths),
+      maxpool_widths=lib.parse_list_str(FLAGS.maxpool_widths),
+      fc_num_hiddens=lib.parse_list_str(FLAGS.fc_num_hiddens),
+      max_grad_norm=FLAGS.max_grad_norm,
+      decay_step=FLAGS.decay_step,
+      decay_rate=FLAGS.decay_rate)
   return hps
 
 
@@ -79,21 +81,39 @@ class CoherenceModel(object):
 
     self._summaries = tf.summary.merge_all()
 
+  def inference_graph(self, sent_inputs, sent_lengths, device):
+    """Build the graph for inference.
+    Return:
+      output_prob: node of coherence probability
+      model_vs: the variable scope of model definition
+    """
+    self._device_0 = device
+    hps = self._hps
+
+    sent_inputs.set_shape([hps.batch_size, hps.max_num_sents, hps.max_sent_len])
+    sent_lengths.set_shape([hps.batch_size, hps.max_num_sents])
+
+    self._sent_inputs = sent_inputs
+    self._sent_lengths = sent_lengths
+    self._build_model()
+
+    return self._output_prob, self._model_vs
+
   def _add_placeholders(self):
     hps = self._hps
     self._sent_inputs = tf.placeholder(
         tf.int32, [hps.batch_size, hps.max_num_sents, hps.max_sent_len])
     self._sent_lengths = tf.placeholder(tf.int32,
                                         [hps.batch_size, hps.max_num_sents])
-    # self._doc_length = tf.placeholder(tf.int32, [hps.batch_size])
     self._targets = tf.placeholder(tf.int32, [hps.batch_size])
 
   def _build_model(self):
     hps = self._hps
     vsize = self._vocab.NumIds
 
-    with tf.variable_scope("coherence"):
-      with tf.variable_scope('embeddings'), tf.device(self._device_0):
+    with tf.variable_scope("coherence") as self._model_vs, \
+        tf.device(self._device_0):
+      with tf.variable_scope('embeddings'):
         embedding = tf.get_variable(
             'embedding', [vsize, hps.emb_dim],
             initializer=tf.truncated_normal_initializer(stddev=1e-4))
@@ -102,7 +122,7 @@ class CoherenceModel(object):
             embedding,
             self._sent_inputs)  #[bs, max_num_sents, max_sent_len, emb_dim]
 
-      with tf.variable_scope('coherence_net'), tf.device(self._device_0):
+      with tf.variable_scope('coherence_net'):
         # Encoder all the sentences with GRU
         with tf.variable_scope('sentence_gru'):
           gru_input = tf.reshape(sent_inputs_embed, [
@@ -242,10 +262,10 @@ class CoherenceModel(object):
             self._targets: targets
         })
 
-  def train_loop(self, sess, batcher, valid_batcher, summary_writer, flags):
+  def train_loop(self, sess, batcher, valid_batcher, summary_writer):
     """Runs model training."""
     step, losses, accuracies = 0, [], []
-    while step < flags.max_run_steps:
+    while step < FLAGS.max_run_steps:
       next_batch = batcher.next()
       summaries, loss, accuracy, train_step = self.run_train_step(
           sess, next_batch)
@@ -256,7 +276,7 @@ class CoherenceModel(object):
       step += 1
 
       # Display current training loss
-      if step % flags.display_freq == 0:
+      if step % FLAGS.display_freq == 0:
         avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss",
                                    train_step)
         avg_acc = lib.compute_avg(accuracies, summary_writer, "avg_acc",
@@ -267,9 +287,9 @@ class CoherenceModel(object):
         summary_writer.flush()
 
       # Run evaluation on validation set
-      if step % flags.valid_freq == 0:
+      if step % FLAGS.valid_freq == 0:
         valid_losses, valid_accs = [], []
-        for _ in xrange(flags.num_valid_batch):
+        for _ in xrange(FLAGS.num_valid_batch):
           next_batch = valid_batcher.next()
           valid_loss, valid_acc = self.run_eval_step(sess, next_batch)
           valid_losses.append(valid_loss)
@@ -283,6 +303,48 @@ class CoherenceModel(object):
         tf.logging.info("\tValid step %d: avg_loss %f avg_acc %f" %
                         (step, avg_valid_loss, avg_valid_acc))
         summary_writer.flush()
+
+  def train(self, data_batcher, valid_batcher):
+    """Runs model training."""
+    with tf.device("/gpu:0"):  # GPU by default
+      restorer = self.build_graph()
+
+    # Restore pretrained model if necessary
+    # if FLAGS.restore_pretrain and restorer is not None:
+    if restorer is not None:
+      ckpt_state = tf.train.get_checkpoint_state(FLAGS.pretrain_dir)
+      if not (ckpt_state and ckpt_state.model_checkpoint_path):
+        raise ValueError("No pretrain model found at %s" % FLAGS.pretrain_dir)
+
+      def load_pretrain(sess):
+        tf.logging.info("Restoring pretrained model from %s" %
+                        ckpt_state.model_checkpoint_path)
+        restorer.restore(sess, ckpt_state.model_checkpoint_path)
+    else:
+      load_pretrain = None
+
+    saver = tf.train.Saver(max_to_keep=FLAGS.max_to_keep)
+    sv = tf.train.Supervisor(
+        logdir=FLAGS.ckpt_root,
+        saver=saver,
+        summary_op=None,
+        save_summaries_secs=FLAGS.checkpoint_secs,
+        save_model_secs=FLAGS.checkpoint_secs,
+        global_step=model.global_step,
+        init_fn=load_pretrain)  # TODO: could exploit more Supervisor features
+
+    config = tf.ConfigProto(allow_soft_placement=True)
+    # Turn on JIT compilation if necessary
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    sess = sv.prepare_or_wait_for_session(config=config)
+
+    # Summary dir is different from ckpt_root to avoid conflict.
+    summary_writer = tf.summary.FileWriter(FLAGS.summary_dir)
+
+    # Start the training loop
+    self.train_loop(sess, data_batcher, valid_batcher, summary_writer)
+
+    sv.Stop()
 
   def get_global_step(self, sess):
     """Get the current number of training steps."""

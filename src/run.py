@@ -24,7 +24,7 @@ tf.app.flags.DEFINE_integer("batch_size", 1,
 # ----------- Train mode related flags ------------------
 tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
-tf.app.flags.DEFINE_float("max_grad_norm", 4.0,
+tf.app.flags.DEFINE_float("max_grad_norm", 0.4,
                           "Maximum gradient norm for gradient clipping.")
 tf.app.flags.DEFINE_integer("decay_step", 30000, "Exponential decay step.")
 tf.app.flags.DEFINE_float("decay_rate", 0.1, "Exponential decay rate.")
@@ -58,7 +58,7 @@ tf.app.flags.DEFINE_integer("emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("num_gpus", 1, "Number of gpus used.")
 # ----------- summarunner related flags ----------------
 tf.app.flags.DEFINE_integer("enc_layers", 1, "Number of encoder layers.")
-tf.app.flags.DEFINE_integer("num_sentences", 100,
+tf.app.flags.DEFINE_integer("num_sents_doc", 100,
                             "Maximum number of sentences in a document.")
 tf.app.flags.DEFINE_integer("num_words_sent", 50,
                             "Maximum number of words in a sentence.")
@@ -84,10 +84,21 @@ tf.app.flags.DEFINE_integer("trg_weight_norm", 0,
 # ----------- summarunner_rf related flags ----------------
 tf.app.flags.DEFINE_string("train_mode", "sl",
                            "Kernel sizes of word-level CNN.")
-tf.app.flags.DEFINE_string("mlp_num_hidden", "256",
+tf.app.flags.DEFINE_string("mlp_num_hiddens", "256",
                            "Kernel sizes of word-level CNN.")
 tf.app.flags.DEFINE_float("rl_coef", 1.0,
                           "Coefficient for RL loss in SL+RL mode.")
+# ----------- cohere_extract related flags ----------------
+tf.app.flags.DEFINE_string("word_conv_widths", "3,5,7",
+                           "Kernel sizes of word-level CNN.")
+tf.app.flags.DEFINE_string("word_conv_filters", "128,256,256",
+                           "Number of output filters for each kernel size.")
+tf.app.flags.DEFINE_float("coherence_coef", 1.0,
+                          "Coefficient of coherence loss in sl+coherence mode.")
+tf.app.flags.DEFINE_integer("coh_samples", 1, "Number of samples/instance.")
+tf.app.flags.DEFINE_string("coherence_dir", "", "Directory of coherence model.")
+tf.app.flags.DEFINE_string("pretrain_dir", "",
+                           "Directory for pretrained model.")
 # ----------- seqmatch related flags ----------------
 tf.app.flags.DEFINE_integer("num_hidden", 256,
                             "Number of hidden units in encoder RNN.")
@@ -96,6 +107,7 @@ tf.app.flags.DEFINE_string("conv_filters", 256, "Number of filters in the CNN.")
 tf.app.flags.DEFINE_string("conv_width", 3, "Width of convolution kernel.")
 tf.app.flags.DEFINE_string("maxpool_width", 2, "Width of max-pooling.")
 # ----------- coherence related flags ----------------
+tf.app.flags.DEFINE_integer("coh_emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("max_num_sents", 6, "Maximum number of sentences.")
 tf.app.flags.DEFINE_integer("gru_num_hidden", "256",
                             "Number of hidden units in the GRU.")
@@ -114,49 +126,6 @@ DocSummary = namedtuple('DocSummary',
 #                              'url document extract_ids count')
 
 
-def Train(model, data_batcher, valid_batcher):
-  """Runs model training."""
-  with tf.device("/gpu:0"):  # GPU by default
-    restorer = model.build_graph()
-
-  # Restore pretrained model if necessary
-  # if FLAGS.restore_pretrain and restorer is not None:
-  if restorer is not None:
-    ckpt_state = tf.train.get_checkpoint_state(FLAGS.pretrain_dir)
-    if not (ckpt_state and ckpt_state.model_checkpoint_path):
-      raise ValueError("No pretrain model found at %s" % FLAGS.pretrain_dir)
-
-    def load_pretrain(sess):
-      tf.logging.info("Restoring pretrained model from %s" %
-                      ckpt_state.model_checkpoint_path)
-      restorer.restore(sess, ckpt_state.model_checkpoint_path)
-  else:
-    load_pretrain = None
-
-  saver = tf.train.Saver(max_to_keep=FLAGS.max_to_keep)
-  sv = tf.train.Supervisor(
-      logdir=FLAGS.ckpt_root,
-      saver=saver,
-      summary_op=None,
-      save_summaries_secs=FLAGS.checkpoint_secs,
-      save_model_secs=FLAGS.checkpoint_secs,
-      global_step=model.global_step,
-      init_fn=load_pretrain)  # TODO: could exploit more Supervisor features
-
-  config = tf.ConfigProto(allow_soft_placement=True)
-  # Turn on JIT compilation if necessary
-  config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
-  sess = sv.prepare_or_wait_for_session(config=config)
-
-  # Summary dir is different from ckpt_root to avoid conflict.
-  summary_writer = tf.summary.FileWriter(FLAGS.summary_dir)
-
-  # Start the training loop
-  model.train_loop(sess, data_batcher, valid_batcher, summary_writer, FLAGS)
-
-  sv.Stop()
-
-
 def main():
   # Configure the enviroment
   tf.logging.set_verbosity(FLAGS.verbosity)
@@ -166,9 +135,12 @@ def main():
   if model_type == "summarunner":
     from models.summarunner import CreateHParams, TrainLoop  #TODO: update API
     from models.summarunner import SummaRuNNer as Model
-  if model_type == "summarunner_rf":
+  elif model_type == "summarunner_rf":
     from models.summarunner_rf import CreateHParams
     from models.summarunner_rf import SummaRuNNerRF as Model
+  elif model_type == "cohere_extract":
+    from models.cohere_extract import CreateHParams
+    from models.cohere_extract import CoherentExtract as Model
   elif model_type == "seqmatch":
     from models.seqmatch import CreateHParams, TrainLoop  #TODO: update API
     from models.seqmatch import SeqMatchNet as Model
@@ -183,7 +155,7 @@ def main():
   input_vocab = vocab.Vocab(FLAGS.input_vocab, FLAGS.input_vsize)
 
   # Create model hyper-parameters
-  hps = CreateHParams(FLAGS)
+  hps = CreateHParams()
   tf.logging.info("Using the following hyper-parameters:\n%r" % str(hps))
 
   if FLAGS.mode == "train":
@@ -197,7 +169,7 @@ def main():
     batch_reader.BUCKET_NUM_BATCH = 1  # ensure all examples are used
 
   # Create data reader
-  if model_type in ["summarunner", "summarunner_rf"]:
+  if model_type in ["summarunner", "summarunner_rf", "cohere_extract"]:
     batcher = batch_reader.ExtractiveBatcher(
         FLAGS.data_path,
         input_vocab,
@@ -262,14 +234,14 @@ def main():
 
   if FLAGS.mode == "train":
     model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
-    Train(model, batcher, valid_batcher)  # start training
+    model.train(batcher, valid_batcher)  # start training
   elif FLAGS.mode == "decode":
     if model_type == "summarunner":
       from utils.decode import SummaRuNNerDecoder
       hps = hps._replace(batch_size=1)
       model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
       decoder = SummaRuNNerDecoder(model, hps)
-      output_fn = decoder.Decode(batcher, FLAGS.extract_topk)
+      output_fn = decoder.decode(batcher, FLAGS.extract_topk)
       evaluate.eval_rouge(output_fn)
     elif model_type == "summarunner_rf":
       from utils.decode import SummaRuNNerRFDecoder
@@ -279,7 +251,7 @@ def main():
           num_gpus=FLAGS.num_gpus)
       decoder = SummaRuNNerRFDecoder(
           model, beam_size=hps.batch_size)  # use batch_size as beam_size
-      output_fn = decoder.Decode(batcher)
+      output_fn = decoder.decode(batcher)
       evaluate.eval_rouge(output_fn)
     else:
       raise NotImplementedError()

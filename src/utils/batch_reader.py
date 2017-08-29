@@ -187,13 +187,13 @@ class ExtractiveBatcher(object):
 
       if self._truncate_input:
         enc_input = [
-            s[:hps.num_words_sent] for s in enc_input[:hps.num_sentences]
+            s[:hps.num_words_sent] for s in enc_input[:hps.num_sents_doc]
         ]
       else:
-        if len(enc_input) > hps.num_sentences:
+        if len(enc_input) > hps.num_sents_doc:
           continue  # throw away too long inputs
 
-      # Now enc_input should fit in 2-D matrix [num_sentences, num_words_sent]
+      # Now enc_input should fit in 2-D matrix [num_sents_doc, num_words_sent]
       enc_sent_len = [len(s) for s in enc_input]
       enc_doc_len = len(enc_input)
 
@@ -202,7 +202,7 @@ class ExtractiveBatcher(object):
           s + [enc_pad_id] * (hps.num_words_sent - l)
           for s, l in zip(enc_input, enc_sent_len)
       ]
-      padded_enc_input += [enc_empty_sent] * (hps.num_sentences - enc_doc_len)
+      padded_enc_input += [enc_empty_sent] * (hps.num_sents_doc - enc_doc_len)
       np_enc_input = np.array(padded_enc_input, dtype=np.int32)
 
       # Compute the relative position. 0 is reserved for padding.
@@ -210,8 +210,8 @@ class ExtractiveBatcher(object):
       sent_rel_pos = [int(i * rel_pos_coef) + 1 for i in range(enc_doc_len)]
 
       # Pad the input lengths and positions
-      pad_enc_sent_len = enc_sent_len + [0] * (hps.num_sentences - enc_doc_len)
-      pad_rel_pos = sent_rel_pos + [0] * (hps.num_sentences - enc_doc_len)
+      pad_enc_sent_len = enc_sent_len + [0] * (hps.num_sents_doc - enc_doc_len)
+      pad_rel_pos = sent_rel_pos + [0] * (hps.num_sents_doc - enc_doc_len)
       np_enc_sent_len = np.array(pad_enc_sent_len, dtype=np.int32)
       np_rel_pos = np.array(pad_rel_pos, dtype=np.int32)
 
@@ -219,9 +219,9 @@ class ExtractiveBatcher(object):
       if len(extract_ids) == 0:
         continue
 
-      np_target = np.zeros([hps.num_sentences], dtype=np.int32)
+      np_target = np.zeros([hps.num_sents_doc], dtype=np.int32)
       for i in extract_ids:
-        if i < hps.num_sentences:
+        if i < hps.num_sents_doc:
           np_target[i] = 1
 
       if hps.trg_weight_norm > 0:
@@ -230,12 +230,12 @@ class ExtractiveBatcher(object):
         weight_norm = hps.trg_weight_norm / (total_count + 0.01)
         weights = [weight_norm * c for c in counts]  # normalize the weights
 
-        np_weights = np.ones([hps.num_sentences], dtype=np.float32)
+        np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
         for i, w in zip(extract_ids, weights):
-          if i < hps.num_sentences:
+          if i < hps.num_sents_doc:
             np_weights[i] = w
       else:
-        np_weights = np.ones([hps.num_sentences], dtype=np.float32)
+        np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
 
       try:
         summary = data_sample.summary

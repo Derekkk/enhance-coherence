@@ -1,0 +1,32 @@
+export CUDA_VISIBLE_DEVICES=1
+python run.py \
+  --model=coherence \
+  --data_path=data/cnndaily/training_shuf.pkl \
+  --input_vocab=data/cnndaily/training.vocab \
+  --input_vsize 150000 \
+  --ckpt_root=checkpoints/cnndaily/coherence/ex03 \
+  --summary_dir=log/cnndaily/coherence/ex03 \
+  --mode=train \
+  --lr 0.2 \
+  --min_lr 0.1 \
+  --decay_step 30000 \
+  --decay_rate 0.98 \
+  --dropout 0.2 \
+  --max_run_steps 1000000 \
+  --batch_size 64 \
+  --valid_path=data/cnndaily/validation_shuf.pkl \
+  --valid_freq 1000 \
+  --display_freq 100 \
+  --checkpoint_secs 1200 \
+  --use_bucketing False \
+  --truncate_input True \
+  --max_num_sents 6 \
+  --max_sent_len 50 \
+  --emb_dim 64 \
+  --gru_num_hidden 128 \
+  --conv_filters "[128,256]" \
+  --conv_heights "[3,3]" \
+  --conv_widths "[7,5]" \
+  --maxpool_widths "[2,2]" \
+  --fc_num_hiddens "[512,256,128]" \
+

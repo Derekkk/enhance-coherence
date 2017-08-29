@@ -171,7 +171,7 @@ class SummaRuNNerRFDecoder(object):
     self._model.build_graph()
     self._beam_size = beam_size
 
-  def Decode(self, batch_reader):
+  def decode(self, batch_reader):
     """Decoding loop for long running process."""
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
     saver = tf.train.Saver()
@@ -240,7 +240,7 @@ class SummaRuNNerDecoder(object):
     self._model.build_graph()
     self._hps = hps
 
-  def Decode(self, batch_reader, extract_topk):
+  def decode(self, batch_reader, extract_topk):
     """Decoding loop for long running process."""
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
     saver = tf.train.Saver()
