@@ -284,6 +284,7 @@ class SummaRuNNerRF(object):
 
               sampled_target = tf.multinomial(
                   logits=extract_logit, num_samples=1)  # [batch_size, 1] int32
+              # Serious BUG found above, extract_logit should be extract_rl_logit
               sampled_target_list.append(sampled_target)
               hist_summary_rl += tf.to_float(
                   sampled_target
