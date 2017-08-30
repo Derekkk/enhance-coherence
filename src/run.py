@@ -94,11 +94,14 @@ tf.app.flags.DEFINE_string("word_conv_widths", "3,5,7",
 tf.app.flags.DEFINE_string("word_conv_filters", "128,256,256",
                            "Number of output filters for each kernel size.")
 tf.app.flags.DEFINE_float("coherence_coef", 1.0,
-                          "Coefficient of coherence loss in sl+coherence mode.")
+                          "Coefficient of coherence loss in REINFORCE.")
 tf.app.flags.DEFINE_integer("coh_samples", 1, "Number of samples/instance.")
 tf.app.flags.DEFINE_string("coherence_dir", "", "Directory of coherence model.")
 tf.app.flags.DEFINE_string("pretrain_dir", "",
                            "Directory for pretrained model.")
+# ----------- cohere_extract_rf related flags ----------------
+tf.app.flags.DEFINE_float("rouge_coef", 1.0,
+                          "Coefficient of ROUGE loss in REINFORCE.")
 # ----------- seqmatch related flags ----------------
 tf.app.flags.DEFINE_integer("num_hidden", 256,
                             "Number of hidden units in encoder RNN.")
@@ -116,7 +119,6 @@ tf.app.flags.DEFINE_string("conv_widths", "3", "Width of convolution kernel.")
 tf.app.flags.DEFINE_string("maxpool_widths", "2", "Width of max-pooling.")
 tf.app.flags.DEFINE_string("fc_num_hiddens", "256,128",
                            "Number of hidden units in the final FC layers.")
-
 # DocSummary = namedtuple('DocSummary', 'document summary extract_ids rouge_2')
 
 DocSummary = namedtuple('DocSummary',
@@ -170,7 +172,9 @@ def main():
     batch_reader.GET_TIMEOUT = 60
 
   # Create data reader
-  if model_type in ["summarunner", "summarunner_rf", "cohere_extract"]:
+  if model_type in [
+      "summarunner", "summarunner_rf", "cohere_extract", "cohere_extract_rf"
+  ]:
     batcher = batch_reader.ExtractiveBatcher(
         FLAGS.data_path,
         input_vocab,

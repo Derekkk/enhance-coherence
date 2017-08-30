@@ -16,23 +16,14 @@
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 import lib
-from multiprocessing import Pool
+
+FLAGS = tf.app.flags.FLAGS
 
 # Import pythonrouge package
 from pythonrouge import PythonROUGE
 ROUGE_dir = "/qydata/ywubw/download/RELEASE-1.5.5"
 sentence_sep = "</s>"
-
-# NB: batch_size could be unspecified (None) in decode mode
-HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
-                     "num_sentences, num_words_sent, rel_pos_max_idx,"
-                     "enc_layers, enc_num_hidden, emb_dim, pos_emb_dim,"
-                     "doc_repr_dim, word_conv_k_sizes, word_conv_filter,"
-                     "min_num_input_sents, min_num_words_sent,"
-                     "max_grad_norm, decay_step, decay_rate,"
-                     "trg_weight_norm, train_mode, mlp_num_hidden, rl_coef")
 
 rouge = PythonROUGE(
     ROUGE_dir,
@@ -66,58 +57,64 @@ def compute_rouge(item):
   return weighted_rouge
 
 
-def CreateHParams(flags):
+# NB: batch_size could be unspecified (None) in decode mode
+HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
+                     "num_sents_doc, num_words_sent, rel_pos_max_idx,"
+                     "enc_layers, enc_num_hidden, emb_dim, pos_emb_dim,"
+                     "doc_repr_dim, word_conv_widths, word_conv_filters,"
+                     "mlp_num_hiddens, train_mode, coherence_coef,"
+                     "rouge_coef, min_num_input_sents, trg_weight_norm,"
+                     "max_grad_norm, decay_step, decay_rate")
+
+
+def CreateHParams():
   """Create Hyper-parameters from tf.app.flags.FLAGS"""
 
-  word_conv_k_sizes = [str(n) for n in flags.word_conv_k_sizes.split(",")]
-  assert flags.mode in ["train", "decode"], "Invalid mode."
-  assert flags.train_mode in ["sl", "rl", "sl+rl"], "Invalid train_mode."
+  assert FLAGS.mode in ["train", "decode"], "Invalid mode."
+  if not any([x in hps.train_modefor for x in ["sl", "rouge", "coherence"]]):
+    raise ValueError("Invalid train mode.")
 
   hps = HParams(
-      mode=flags.mode,  # train, eval, decode
-      train_mode=flags.train_mode,  # sl, rl
-      lr=flags.lr,
-      min_lr=flags.min_lr,
-      dropout=flags.dropout,
-      batch_size=flags.batch_size,
-      num_sentences=flags.num_sentences,  # number of sentences in a document
-      num_words_sent=flags.num_words_sent,  # number of words in a sentence
-      rel_pos_max_idx=flags.rel_pos_max_idx,  # number of relative positions
-      enc_layers=flags.enc_layers,  # number of layers for sentence-level rnn
-      enc_num_hidden=flags.enc_num_hidden,  # for sentence-level rnn
-      emb_dim=flags.emb_dim,
-      pos_emb_dim=flags.pos_emb_dim,
-      doc_repr_dim=flags.doc_repr_dim,
-      word_conv_k_sizes=word_conv_k_sizes,
-      word_conv_filter=flags.word_conv_filter,
-      mlp_num_hidden=lib.parse_list_str(flags.mlp_num_hidden),
-      min_num_input_sents=flags.min_num_input_sents,  # for batch reader
-      min_num_words_sent=flags.min_num_words_sent,  # for batch reader
-      max_grad_norm=flags.max_grad_norm,
-      decay_step=flags.decay_step,
-      decay_rate=flags.decay_rate,
-      trg_weight_norm=flags.trg_weight_norm,
-      rl_coef=flags.rl_coef)
+      mode=FLAGS.mode,
+      train_mode=FLAGS.train_mode,
+      lr=FLAGS.lr,
+      min_lr=FLAGS.min_lr,
+      dropout=FLAGS.dropout,
+      batch_size=FLAGS.batch_size,
+      num_sents_doc=FLAGS.num_sents_doc,  # number of sentences in a document
+      num_words_sent=FLAGS.num_words_sent,  # number of words in a sentence
+      rel_pos_max_idx=FLAGS.rel_pos_max_idx,  # number of relative positions
+      enc_layers=FLAGS.enc_layers,  # number of layers for sentence-level rnn
+      enc_num_hidden=FLAGS.enc_num_hidden,  # for sentence-level rnn
+      emb_dim=FLAGS.emb_dim,
+      pos_emb_dim=FLAGS.pos_emb_dim,
+      doc_repr_dim=FLAGS.doc_repr_dim,
+      word_conv_widths=lib.parse_list_str(FLAGS.word_conv_widths),
+      word_conv_filters=lib.parse_list_str(FLAGS.word_conv_filters),
+      mlp_num_hiddens=lib.parse_list_str(FLAGS.mlp_num_hiddens),
+      min_num_input_sents=FLAGS.min_num_input_sents,  # for batch reader
+      trg_weight_norm=FLAGS.trg_weight_norm,  # for batch reader
+      max_grad_norm=FLAGS.max_grad_norm,
+      decay_step=FLAGS.decay_step,
+      decay_rate=FLAGS.decay_rate,
+      coherence_coef=FLAGS.coherence_coef,  # coefficient of coherence loss
+      rouge_coef=FLAGS.rouge_coef)  # coefficient of ROUGE loss
   return hps
 
 
-class SummaRuNNerRF(object):
-  """ Implements extractive summarization model based on the following works:
+class CoherentExtractRF(object):
+  """ An extractive summarization model based on SummaRuNNer that is enhanced
+      with REINFORCE by ROUGE and local coherence. Related works are listed:
 
-  [1] Cheng, J., & Lapata, M. (2016). Neural Summarization by Extracting
-      Sentences and Words. arXiv:1603.07252 [Cs].
-
-  [2] Nallapati, R., Zhai, F., & Zhou, B. (2016). SummaRuNNer: A Recurrent
+  [1] Nallapati, R., Zhai, F., & Zhou, B. (2016). SummaRuNNer: A Recurrent
       Neural Network based Sequence Model for Extractive Summarization of
       Documents. arXiv:1611.04230 [Cs].
 
-  This is the extractive version of SummaRuNNer.
+  [2] Li, J., & Hovy, E. H. (2014). A Model of Coherence Based on
+      Distributed Sentence Representation. In EMNLP (pp. 2039-2048).
   """
 
   def __init__(self, hps, input_vocab, num_gpus=0):
-    if hps.mode not in ["train", "decode"]:
-      raise ValueError("Only train and decode mode are supported.")
-
     self._hps = hps
     self._input_vocab = input_vocab
     self._num_gpus = num_gpus
@@ -131,14 +128,13 @@ class SummaRuNNerRF(object):
     if self._hps.mode == "train":
       self._add_loss()
       self._add_train_op()
-      if self._hps.train_mode in ["rl", "sl+rl"]:
+      if "rouge " in self._hps.train_mode:
         self._pool = Pool(15)
 
     self._summaries = tf.summary.merge_all()
 
   def _allocate_devices(self):
     num_gpus = self._num_gpus
-    assert num_gpus >= 0
 
     if num_gpus == 0:
       raise ValueError("Current implementation requires at least one GPU.")
@@ -147,31 +143,30 @@ class SummaRuNNerRF(object):
       self._device_1 = "/gpu:0"
     elif num_gpus > 1:
       self._device_0 = "/gpu:0"
-      self._device_1 = "/gpu:0"
-      tf.logging.warn("Current implementation uses at most one GPU.")
+      self._device_1 = "/gpu:1"
 
   def _add_placeholders(self):
     """Inputs to be fed to the graph."""
     hps = self._hps
     # Input sequence
     self._inputs = tf.placeholder(
-        tf.int32, [hps.batch_size, hps.num_sentences, hps.num_words_sent],
+        tf.int32, [hps.batch_size, hps.num_sents_doc, hps.num_words_sent],
         name="inputs")
     self._input_sent_lens = tf.placeholder(
-        tf.int32, [hps.batch_size, hps.num_sentences], name="input_sent_lens")
+        tf.int32, [hps.batch_size, hps.num_sents_doc], name="input_sent_lens")
     self._input_doc_lens = tf.placeholder(
         tf.int32, [hps.batch_size], name="input_doc_lens")
     self._input_rel_pos = tf.placeholder(
-        tf.int32, [hps.batch_size, hps.num_sentences], name="input_rel_pos")
+        tf.int32, [hps.batch_size, hps.num_sents_doc], name="input_rel_pos")
 
     # Output extraction decisions
     self._extract_targets = tf.placeholder(
-        tf.int32, [hps.batch_size, hps.num_sentences], name="extract_targets")
-    # May weight the extraction decisions differently
+        tf.int32, [hps.batch_size, hps.num_sents_doc], name="extract_targets")
+    # The extraction decisions may be weighted differently
     self._target_weights = tf.placeholder(
-        tf.float32, [hps.batch_size, hps.num_sentences], name="target_weights")
+        tf.float32, [hps.batch_size, hps.num_sents_doc], name="target_weights")
 
-    # For RL mode
+    # For ROUGE mode
     self._document_strs = tf.placeholder(
         tf.string, [hps.batch_size], name="document_strs")
     self._summary_strs = tf.placeholder(
@@ -181,11 +176,7 @@ class SummaRuNNerRF(object):
     """Construct the deep neural network of SummaRuNNer."""
     hps = self._hps
 
-    batch_size_ts = hps.batch_size  # batch size Tensor
-    if hps.batch_size is None:
-      batch_size_ts = tf.shape(self._inputs)[0]
-
-    with tf.variable_scope("summarunner"):
+    with tf.variable_scope("coherent_extract") as self._vs:
       with tf.variable_scope("embeddings"):
         self._add_embeddings()
 
@@ -196,7 +187,7 @@ class SummaRuNNerRF(object):
         # Hierarchical encoding of input document
         self._sentence_vecs = self._add_encoder(
             self._inputs, self._input_sent_lens, self._input_doc_lens
-        )  # [num_sentences, batch_size, enc_num_hidden*2]
+        )  # [num_sents_doc, batch_size, enc_num_hidden*2]
         # Note: output size of Bi-RNN is double of the enc_num_hidden
 
         # Document representation
@@ -209,24 +200,27 @@ class SummaRuNNerRF(object):
                 doc_mean_vec, hps.doc_repr_dim, True, scope="doc_repr_linear"))
 
         # Absolute position embedding
-        abs_pos_idx = tf.expand_dims(tf.range(0, hps.num_sentences),
-                                     1)  # [num_sentences, 1]
-
-        abs_pos_batch = tf.tile(abs_pos_idx, tf.stack(
-            [1, batch_size_ts]))  # [num_sentences, batch_size]
-        self._sent_abs_pos_emb = tf.nn.embedding_lookup(
-            self._abs_pos_embed,
-            abs_pos_batch)  # [num_sentences, batch_size, pos_emb_dim]
+        abs_pos_idx = tf.range(0, hps.num_sents_doc)  # [num_sents_doc]
+        abs_pos_emb = tf.expand_dims(
+            tf.nn.embedding_lookup(self._abs_pos_embed, abs_pos_idx),
+            1)  # [num_sents_doc, 1, pos_emb_dim]
+        batch_size_ts = hps.batch_size if hps.batch_size else tf.shape(
+            self._inputs)[0]  # batch size Tensor
+        self._sent_abs_pos_emb = tf.tile(
+            abs_pos_emb, tf.stack(
+                [1, batch_size_ts,
+                 1]))  # [num_sents_doc, batch_size, pos_emb_dim]
 
         # Relative position embedding
         self._sent_rel_pos_emb = tf.nn.embedding_lookup(
             self._rel_pos_embed,
-            self._input_rel_pos)  # [batch_size, num_sentences, pos_emb_dim]
+            self._input_rel_pos)  # [batch_size, num_sents_doc, pos_emb_dim]
 
-        # Unstack the features into list: num_sentences * [batch_size, ?]
-        sentence_vecs_list = tf.unstack(self._sentence_vecs, axis=0)
+        # Unstack the features into list: num_sents_doc * [batch_size, ?]
+        sent_vecs_list = tf.unstack(self._sentence_vecs, axis=0)
         abs_pos_emb_list = tf.unstack(self._sent_abs_pos_emb, axis=0)
         rel_pos_emb_list = tf.unstack(self._sent_rel_pos_emb, axis=1)
+        targets = tf.unstack(tf.to_float(self._extract_targets), axis=1)
 
       # Compute the extraction probability of each sentence
       with tf.variable_scope("extract_sent",
@@ -234,16 +228,13 @@ class SummaRuNNerRF(object):
           tf.device(self._device_0):
 
         if hps.mode == "train":  # train mode
-          if hps.train_mode in ["sl", "sl+rl"]:
-            hist_summary = tf.zeros_like(sentence_vecs_list[0])
+          if "sl" in hps.train_mode:
+            # Initialize the representation of all history summaries extracted
+            hist_summary = tf.zeros_like(sent_vecs_list[0])
             extract_logit_list, extract_prob_list = [], []
 
-            targets = tf.unstack(
-                tf.to_float(self._extract_targets),
-                axis=1)  # [batch_size] * num_sentences
-
-            for i in xrange(hps.num_sentences):
-              cur_sent_vec = sentence_vecs_list[i]
+            for i in xrange(hps.num_sents_doc):  # loop over the sentences
+              cur_sent_vec = sent_vecs_list[i]
               cur_abs_pos = abs_pos_emb_list[i]
               cur_rel_pos = rel_pos_emb_list[i]
 
@@ -261,15 +252,15 @@ class SummaRuNNerRF(object):
               hist_summary += target * cur_sent_vec  #[batch_size, enc_num_hidden*2]
 
             self._extract_logits = tf.stack(
-                extract_logit_list, axis=1)  # [batch_size, num_sentences, 2]
+                extract_logit_list, axis=1)  # [batch_size, num_sents_doc, 2]
             self._extract_probs = tf.stack(
-                extract_prob_list, axis=1)  # [batch_size, num_sentences, 2]
+                extract_prob_list, axis=1)  # [batch_size, num_sents_doc, 2]
 
-          if hps.train_mode in ["rl", "sl+rl"]:
-            hist_summary_rl = tf.zeros_like(sentence_vecs_list[0])
-            extract_logit_rl_list, sampled_target_list = [], []
+          if "rouge" in hps.train_mode or "coherence" in hps.train_mode:
+            rl_hist_summary = tf.zeros_like(sentence_vecs_list[0])
+            rl_extract_logit_list, sampled_extract_list = [], []
 
-            for i in xrange(hps.num_sentences):
+            for i in xrange(hps.num_sents_doc):
               cur_sent_vec = sentence_vecs_list[i]
               cur_abs_pos = abs_pos_emb_list[i]
               cur_rel_pos = rel_pos_emb_list[i]
@@ -277,23 +268,24 @@ class SummaRuNNerRF(object):
               if i > 0:  # NB: reusing is important!
                 tf.get_variable_scope().reuse_variables()
 
-              extract_rl_logit = self._compute_extract_prob(
+              rl_extract_logit = self._compute_extract_prob(
                   cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
-                  hist_summary_rl)  # [batch_size, 2]
-              extract_logit_rl_list.append(extract_rl_logit)
+                  rl_hist_summary)  # [batch_size, 2]
+              rl_extract_logit_list.append(rl_extract_logit)
 
-              sampled_target = tf.multinomial(
-                  logits=extract_logit, num_samples=1)  # [batch_size, 1] int32
-              sampled_target_list.append(sampled_target)
-              hist_summary_rl += tf.to_float(
-                  sampled_target
+              sampled_extract = tf.multinomial(
+                  logits=rl_extract_logit,
+                  num_samples=1)  # [batch_size, 1] int32
+              sampled_extract_list.append(sampled_extract)
+              rl_hist_summary += tf.to_float(
+                  sampled_extract
               ) * cur_sent_vec  # [batch_size, enc_num_hidden*2]
 
-            self._extract_logits_rl = tf.stack(
-                extract_logit_rl_list, axis=1)  # [batch_size, num_sentences, 2]
-            self._sampled_targets = tf.concat(
-                sampled_target_list,
-                axis=1)  # [batch_size, num_sentences] int32
+            self._rl_extract_logits = tf.stack(
+                rl_extract_logit_list, axis=1)  # [batch_size, num_sents_doc, 2]
+            self._sampled_extracts = tf.concat(
+                sampled_extract_list,
+                axis=1)  # [batch_size, num_sents_doc] int32
 
         else:  # decode mode
           self._cur_sent_vec = tf.placeholder(tf.float32,
@@ -323,7 +315,7 @@ class SummaRuNNerRF(object):
           initializer=tf.truncated_normal_initializer(stddev=1e-4))
       # Absolute position embeddings
       self._abs_pos_embed = tf.get_variable(
-          "abs_pos_embed", [hps.num_sentences, hps.pos_emb_dim],
+          "abs_pos_embed", [hps.num_sents_doc, hps.pos_emb_dim],
           dtype=tf.float32,
           initializer=tf.truncated_normal_initializer(stddev=1e-4))
       # Relative position embeddings
@@ -336,74 +328,63 @@ class SummaRuNNerRF(object):
     hps = self._hps
 
     # Masking the word embeddings
-    sent_lens_rsp = tf.reshape(sent_lens, [-1])  # [batch_size * num_sentences]
+    sent_lens_rsp = tf.reshape(sent_lens, [-1])  # [batch_size * num_sents_doc]
     word_masks = tf.expand_dims(
         tf.sequence_mask(
             sent_lens_rsp, maxlen=hps.num_words_sent, dtype=tf.float32),
-        2)  # [batch_size * num_sentences, num_words_sent, 1]
+        2)  # [batch_size * num_sents_doc, num_words_sent, 1]
 
     inputs_rsp = tf.reshape(inputs, [-1, hps.num_words_sent])
     emb_inputs = tf.nn.embedding_lookup(
         self._input_embed,
-        inputs_rsp)  # [batch_size * num_sentences, num_words_sent, emb_size]
+        inputs_rsp)  # [batch_size * num_sents_doc, num_words_sent, emb_dim]
     emb_inputs = emb_inputs * word_masks
 
     # Level 1: Add the word-level convolutional neural network
     word_conv_outputs = []
-    for k_size in hps.word_conv_k_sizes:
+
+    for num_filter, width in zip(hps.word_conv_filters, hps.word_conv_widths):
       # Create CNNs with different kernel width
-      word_conv_k = tf.layers.conv1d(
+      word_conv = tf.layers.conv1d(
           emb_inputs,
-          hps.word_conv_filter, (k_size,),
+          num_filter,
+          width,
           padding="same",
           kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1))
-      mean_pool_sent = tf.reduce_mean(
-          word_conv_k, axis=1)  # [batch_size * num_sentences, word_conv_filter]
-      word_conv_outputs.append(mean_pool_sent)
 
-    word_conv_output = tf.concat(
+      word_mean_pool = tf.reduce_mean(
+          word_conv, axis=1)  # [batch_size * num_sents_doc, num_filter]
+      word_conv_outputs.append(word_mean_pool)
+
+    word_conv_concat = tf.concat(
         word_conv_outputs, axis=1)  # concat the sentence representations
     # Reshape the representations of sentences
-    sentence_size = len(hps.word_conv_k_sizes) * hps.word_conv_filter
-    sentence_repr = tf.reshape(word_conv_output, [
-        -1, hps.num_sentences, sentence_size
-    ])  # [batch_size, num_sentences, sentence_size]
+    sentence_size = sum(hps.word_conv_filters)
+    sentence_repr = tf.reshape(word_conv_concat, [
+        -1, hps.num_sents_doc, sentence_size
+    ])  # [batch_size, num_sents_doc, sentence_size]
 
     # Level 2: Add the sentence-level RNN
-    enc_model = cudnn_rnn_ops.CudnnGRU(
+    sent_rnn_output, _ = lib.cudnn_rnn_wrapper(
+        sentence_repr,
+        "gru",
         hps.enc_layers,
         hps.enc_num_hidden,
         sentence_size,
+        "enc_cudnn_gru_var",
         direction="bidirectional",
-        dropout=hps.dropout)
-    # Compute the total size of RNN params (Tensor)
-    params_size_ts = enc_model.params_size()
-    params = tf.Variable(
-        tf.random_uniform([params_size_ts], minval=-0.1, maxval=0.1),
-        validate_shape=False,
-        name="encoder_cudnn_gru_var")
-
-    batch_size_ts = tf.shape(inputs)[0]  # batch size Tensor
-    init_state = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
-    # init_c = tf.zeros(tf.stack([2, batch_size_ts, hps.enc_num_hidden]))
-
-    # Call the CudnnGRU
-    sentence_vecs_t = tf.transpose(sentence_repr, [1, 0, 2])
-    sent_rnn_output, _ = enc_model(
-        input_data=sentence_vecs_t, input_h=init_state,
-        params=params)  # [num_sentences, batch_size, enc_num_hidden*2]
+        dropout=hps.dropout)  # [num_sents_doc, batch_size, enc_num_hidden*2]
 
     # Masking the paddings
-    sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sentences,
-                                      tf.float32)  # [batch_size, num_sentences]
+    sent_out_masks = tf.sequence_mask(doc_lens, hps.num_sents_doc,
+                                      tf.float32)  # [batch_size, num_sents_doc]
     sent_out_masks = tf.expand_dims(tf.transpose(sent_out_masks),
-                                    2)  # [num_sentences, batch_size, 1]
-    sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sentences, batch_size, enc_num_hidden*2]
+                                    2)  # [num_sents_doc, batch_size, 1]
+    sent_rnn_output = sent_rnn_output * sent_out_masks  # [num_sents_doc, batch_size, enc_num_hidden*2]
 
     if transpose_output:
-      sent_rnn_output = tf.transpose(
-          sent_rnn_output, [1, 0,
-                            2])  # [batch_size, num_sentences, enc_num_hidden*2]
+      sent_rnn_output = tf.transpose(sent_rnn_output, [1, 0, 2])
+      # [batch_size, num_sents_doc, enc_num_hidden*2]
 
     return sent_rnn_output
 
@@ -416,10 +397,10 @@ class SummaRuNNerRF(object):
         [sent_vec, abs_pos_emb, rel_pos_emb, doc_repr, hist_sum_norm], axis=1)
 
     # Construct an MLP for extraction decisions
-    for i, num_hidden in enumerate(hps.mlp_num_hidden):
+    for i, n in enumerate(hps.mlp_num_hiddens):
       mlp_hidden = tf.contrib.layers.fully_connected(
           mlp_hidden,
-          num_hidden,
+          n,
           activation_fn=tf.nn.relu,  # tf.tanh/tf.sigmoid
           weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
           scope="mlp_layer_%d" % (i + 1))
@@ -436,13 +417,13 @@ class SummaRuNNerRF(object):
   def _add_loss(self):
     hps = self._hps
 
-    with tf.variable_scope("loss"), tf.device(self._device_1):
-      # Masking the loss
+    with tf.variable_scope("loss"), tf.device(self._device_0):
+      loss = None
       loss_mask = tf.sequence_mask(
-          self._input_doc_lens, maxlen=hps.num_sentences,
-          dtype=tf.float32)  # [batch_size, num_sentences]
+          self._input_doc_lens, maxlen=hps.num_sents_doc,
+          dtype=tf.float32)  # [batch_size, num_sents_doc]
 
-      if hps.train_mode in ["sl", "sl+rl"]:  # supervised learning
+      if "sl" in hps.train_mode:  # supervised learning
         xe_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=self._extract_targets,
             logits=self._extract_logits,
@@ -451,56 +432,62 @@ class SummaRuNNerRF(object):
         batch_loss = tf.div(
             tf.reduce_sum(xe_loss * self._target_weights * loss_mask, 1),
             tf.to_float(self._input_doc_lens))
-        loss = tf.reduce_mean(batch_loss)
+        sl_loss = tf.reduce_mean(batch_loss)
+        tf.summary.scalar("sl_loss", sl_loss)
+        loss = sl_loss
 
-      if hps.train_mode in ["rl", "sl+rl"]:  # reinforcement learning
-        # 1. Compute immediate rewards using a wrapped python function
-        rewards, total_rewards = tf.py_func(
-            self._get_rewards, [
-                self._sampled_targets, self._input_doc_lens,
+      rewards = None
+      if "rouge" in hps.train_mode:
+        rouge_rewards = tf.py_func(
+            self._get_rouge_rewards, [
+                self._sampled_extracts, self._input_doc_lens,
                 self._document_strs, self._summary_strs
             ],
-            Tout=[tf.float32, tf.float32],
+            Tout=tf.float32,
             stateful=False,
-            name="reward_func")
+            name="rouge_reward")
+        rouge_rewards.set_shape([hps.batch_size])
+        tf.summary.scalar("rouge_reward", tf.reduce_mean(rouge_rewards))
+        rewards = rouge_rewards * hps.rouge_coef
 
-        # Shape information missing in py_func output Tensors.
-        # hps.batch_size must be specified when training.
-        rewards.set_shape([hps.batch_size, hps.num_sentences])
-        rewards_list = tf.unstack(rewards, axis=1)
-        total_rewards.set_shape([hps.batch_size])
-        self._avg_reward = tf.reduce_mean(total_rewards)  # average reward
-        tf.summary.scalar("avg_reward", self._avg_reward)
+      if "coherence" in hps.train_mode:
+        coherence_rewards = self._get_coherence_rewards()
+        coherence_rewards.set_shape([hps.batch_size])
+        tf.summary.scalar("coherence_reward", tf.reduce_mean(coherence_rewards))
+        if rewards:
+          rewards += coherence_rewards * hps.coherence_coef
+        else:
+          rewards = coherence_rewards * hps.coherence_coef
 
-        # 2. Compute the return value by cumulating all the advantages backwards
-        rev_returns = []  # reversed list of returns
-        cumulator = None
-        for r in reversed(rewards_list):
-          cumulator = r if cumulator is None else cumulator + r  # discount=1
-          rev_returns.append(cumulator)
-        returns = tf.stack(
-            list(reversed(rev_returns)), axis=1)  # [batch_size, num_sentences]
+      if rewards:
+        self._avg_reward = tf.reduce_mean(rewards)
 
-        # 3. Compute the negative log-likelihood of chosen actions
+        # Discount factor=1.0, and hence return is same with final reward
+        returns = tf.tile(tf.expand_dims(rewards, 1),
+                          [1, hps.num_sents_doc])  # [batch_size, num_sents_doc]
+
+        # Compute the negative log-likelihood of chosen actions
         neg_log_probs = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=self._sampled_targets,
-            logits=self._extract_logits_rl,
-            name="rl_neg_log_prob")  # [batch_size, num_sentences]
+            labels=self._sampled_extracts,
+            logits=self._rl_extract_logits,
+            name="neg_log_probs")  # [batch_size, num_sents_doc]
 
-        # 4. Compute the policy loss
+        # Compute the policy loss, average over the samples
         batch_loss = tf.div(
             tf.reduce_sum(neg_log_probs * returns * loss_mask, 1),
             tf.to_float(self._input_doc_lens))
-
-        if hps.train_mode == "rl":
-          loss = tf.reduce_mean(batch_loss)
+        rl_loss = tf.reduce_mean(batch_loss)
+        tf.summary.scalar("rl_loss", rl_loss)
+        if loss:
+          loss += rl_loss
         else:
-          loss += hps.rl_coef * tf.reduce_mean(batch_loss)
+          loss = rl_loss
 
     tf.summary.scalar("loss", loss)
     self._loss = loss
 
-  def _get_rewards(self, sampled_targets, doc_lens, doc_strs, summary_strs):
+  def _get_rouge_rewards(self, sampled_targets, doc_lens, doc_strs,
+                         summary_strs):
     ext_sents_list, sum_sents_list = [], []
     for extracts, doc_str, summary_str in zip(sampled_targets, doc_strs,
                                               summary_strs):
@@ -513,12 +500,114 @@ class SummaRuNNerRF(object):
 
     rouge_scores = self._pool.map(compute_rouge,
                                   zip(ext_sents_list, sum_sents_list))
-    np_scores = np.zeros_like(sampled_targets, dtype=np.float32)
-    for i, j in enumerate(doc_lens):
-      np_scores[i, j - 1] = rouge_scores[i]  # index starts with 0
-    np_total_scores = np.array(rouge_scores, dtype=np.float32)
+    np_scores = np.array(rouge_scores, dtype=np.float32)
+    return np_scores
 
-    return np_scores, np_total_scores
+  def _get_coherence_rewards(self):
+    hps = self._hps
+
+    import coherence
+    self._coh_hps = coherence.CreateHParams()._replace(batch_size=None)
+    assert hps.num_words_sent == self._coh_hps.max_sent_len, \
+        "num_words_sent must equal to max_sent_len"
+
+    # Step 1: convert the format
+    sent_inputs, sent_lens, states = tf.py_func(
+        self._convert_to_coherence, [
+            self._sampled_extracts, self._inputs, self._input_doc_lens,
+            self._input_sent_lens
+        ],
+        Tout=[tf.int32, tf.int32, tf.int32],
+        stateful=False,
+        name="convert_to_coherence_format")
+
+    # Step 2: add the coherence model to computation graph
+    coherence_model = coherence.CoherenceModel(
+        self._coh_hps, self._input_vocab, num_gpus=1)
+    coh_prob, self._coh_vs = coherence_model.inference_graph(
+        sent_inputs, sent_lens, device=self._device_1)
+
+    # Step 3: convert the coherence probabilities to rewards and compute loss
+    rewards = tf.py_func(
+        self._convert_to_reward, [coh_prob, states],
+        Tout=tf.float32,
+        stateful=False,
+        name="convert_to_reward")  # [batch_size, coh_samples]
+
+    return rewards
+
+  def _convert_to_coherence(self, sampled_extracts, inputs, doc_lens,
+                            sent_lens):
+    """
+    Parameters:
+      sampled_extracts: [batch_size, num_sents_doc] 0 or 1
+      inputs: [batch_size, num_sents_doc, num_words_sent]
+      doc_lens: [batch_size]
+      sent_lens: [batch_size, num_sents_doc]
+
+    Returns:
+      np_sents: [?, max_num_sents, max_sent_len]
+      np_sent_lens: [?, max_num_sents]
+      np_states: [?]
+    """
+    coh_hps = self._coh_hps
+    max_num_sents = coh_hps.max_num_sents
+    max_sent_len = coh_hps.max_sent_len
+
+    pad_sent = np.array(
+        [self._input_vocab.pad_id] * max_sent_len, dtype=np.int32)
+
+    ext_sents_list, states = [], []
+    for extracts, doc, doc_len, sent_len in zip(sampled_extracts, inputs,
+                                                doc_lens, sent_lens):
+      extracted_sents = [(doc[i], sent_len[i]) for i, ext in enumerate(extracts)
+                         if ext and i < doc_len]
+      if not extracted_sents:
+        states.append(0)  # Failure
+      elif len(extracted_sents) <= max_num_sents:
+        ext_sents_list.append(extracted_sents)
+        states.append(1)  # Success
+      else:
+        states.append(0)  # Failure
+
+    if ext_sents_list:
+      sents_batch, lens_batch = [], []
+      for item in ext_sents_list:
+        sents = [s for s, _ in item]
+        sents += [pad_sent] * (max_num_sents - len(sents))
+        sents_batch.append(sents)
+
+        lens = [l for _, l in item]
+        lens += [0] * (max_num_sents - len(lens))
+        lens_batch.append(lens)
+
+      np_sents = np.array(sents_batch, dtype=np.int32)
+      np_sent_lens = np.array(lens_batch, dtype=np.int32)
+      np_states = np.array(states, dtype=np.int32)
+    else:  # No valid extractions, return pseudo output
+      np_sents = np.zeros([1, max_num_sents, max_sent_len], dtype=np.int32)
+      np_sent_lens = np.zeros([1, max_num_sents], dtype=np.int32)
+      np_states = np.array(states, dtype=np.int32)
+
+    return np_sents, np_sent_lens, np_states
+
+  def _convert_to_reward(self, extract_probs, states):
+    """
+    Parameters:
+      extract_probs: [?] float32
+      states: [batch_size] 0/1
+
+    Returns:
+      rewards: [batch_size] float32
+    """
+    rewards = np.zeros_like(states, dtype=np.float32)  # zero if fail
+    idx = 0
+    for i, s in enumerate(states):
+      if s:
+        rewards[i] = extract_probs[idx]
+        idx += 1
+
+    return rewards
 
   def _add_train_op(self):
     """Sets self._train_op for training."""
@@ -531,7 +620,7 @@ class SummaRuNNerRF(object):
     tf.summary.scalar("learning_rate", self._lr_rate)
 
     tvars = tf.trainable_variables()
-    with tf.device(self._device_1):
+    with tf.device(self._device_0):
       # Compute gradients
       grads, global_norm = tf.clip_by_global_norm(
           tf.gradients(self._loss, tvars), hps.max_grad_norm)
@@ -560,7 +649,7 @@ class SummaRuNNerRF(object):
               self._extract_targets: extract_targets,
               self._target_weights: target_weights
           })
-    else:  # rl or sl+rl
+    else:  # with coherence or rouge
       to_return = [
           self._train_op, self._summaries, self._loss, self._avg_reward,
           self.global_step
@@ -597,7 +686,7 @@ class SummaRuNNerRF(object):
               self._extract_targets: extract_targets,
               self._target_weights: target_weights
           })
-    else:  # rl or sl+rl
+    else:  # with coherence or rouge
       doc_strs, summary_strs = others
       result = sess.run(
           [self._loss, self._avg_reward],
@@ -614,10 +703,10 @@ class SummaRuNNerRF(object):
 
     return result
 
-  def train_loop_sl(self, sess, batcher, valid_batcher, summary_writer, flags):
+  def train_loop_sl(self, sess, batcher, valid_batcher, summary_writer):
     """Runs model training."""
     step, losses = 0, []
-    while step < flags.max_run_steps:
+    while step < FLAGS.max_run_steps:
       next_batch = batcher.next()
       summaries, loss, train_step = self.run_train_step(sess, next_batch)
 
@@ -626,7 +715,7 @@ class SummaRuNNerRF(object):
       step += 1
 
       # Display current training loss
-      if step % flags.display_freq == 0:
+      if step % FLAGS.display_freq == 0:
         avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss",
                                    train_step)
         tf.logging.info("Train step %d: avg_loss %f" % (train_step, avg_loss))
@@ -634,9 +723,9 @@ class SummaRuNNerRF(object):
         summary_writer.flush()
 
       # Run evaluation on validation set
-      if step % flags.valid_freq == 0:
+      if step % FLAGS.valid_freq == 0:
         valid_losses = []
-        for _ in xrange(flags.num_valid_batch):
+        for _ in xrange(FLAGS.num_valid_batch):
           next_batch = valid_batcher.next()
           valid_loss = self.run_eval_step(sess, next_batch)
           valid_losses.append(valid_loss)
@@ -649,10 +738,10 @@ class SummaRuNNerRF(object):
 
         summary_writer.flush()
 
-  def train_loop_rl(self, sess, batcher, valid_batcher, summary_writer, flags):
+  def train_loop_rl(self, sess, batcher, valid_batcher, summary_writer):
     """Runs model training."""
     step, losses, rewards = 0, [], []
-    while step < flags.max_run_steps:
+    while step < FLAGS.max_run_steps:
       next_batch = batcher.next()
       summaries, loss, reward, train_step = self.run_train_step(
           sess, next_batch)
@@ -663,7 +752,7 @@ class SummaRuNNerRF(object):
       step += 1
 
       # Display current training loss
-      if step % flags.display_freq == 0:
+      if step % FLAGS.display_freq == 0:
         avg_loss = lib.compute_avg(losses, summary_writer, "avg_loss",
                                    train_step)
         avg_reward = lib.compute_avg(rewards, summary_writer, "avg_reward",
@@ -675,9 +764,9 @@ class SummaRuNNerRF(object):
         summary_writer.flush()
 
       # Run evaluation on validation set
-      if step % flags.valid_freq == 0:
+      if step % FLAGS.valid_freq == 0:
         valid_losses, valid_rewards = [], []
-        for _ in xrange(flags.num_valid_batch):
+        for _ in xrange(FLAGS.num_valid_batch):
           next_batch = valid_batcher.next()
           valid_loss, valid_reward = self.run_eval_step(sess, next_batch)
           valid_losses.append(valid_loss)
@@ -694,11 +783,66 @@ class SummaRuNNerRF(object):
 
         summary_writer.flush()
 
-  def train_loop(self, sess, batcher, valid_batcher, summary_writer, flags):
+  def train_loop(self, sess, batcher, valid_batcher, summary_writer):
     if self._hps.train_mode == "sl":
-      self.train_loop_sl(sess, batcher, valid_batcher, summary_writer, flags)
-    else:  # rl or sl+rl
-      self.train_loop_rl(sess, batcher, valid_batcher, summary_writer, flags)
+      self.train_loop_sl(sess, batcher, valid_batcher, summary_writer)
+    else:  # coherence or sl+coherence
+      self.train_loop_rl(sess, batcher, valid_batcher, summary_writer)
+
+  def train(self, data_batcher, valid_batcher):
+    """Runs model training."""
+    hps = self._hps
+    assert hps.mode == "train", "This method is only callable in train mode."
+
+    with tf.device("/gpu:0"):  # GPU by default
+      self.build_graph()
+
+    if "coherence" in hps.train_mode:  # restore coherence model params
+      coherence_vars = tf.get_collection(
+          tf.GraphKeys.GLOBAL_VARIABLES, scope=self._coh_vs.name)
+      coh_restorer = tf.train.Saver(
+          coherence_vars)  #restore coherence model params
+      coh_ckpt_state = tf.train.get_checkpoint_state(FLAGS.coherence_dir)
+      if not (coh_ckpt_state and coh_ckpt_state.model_checkpoint_path):
+        raise ValueError("No pretrain model found at %s" % FLAGS.coherence_dir)
+
+      # Restore pretrained extraction model if necessary
+      extract_vars = tf.get_collection(
+          tf.GraphKeys.GLOBAL_VARIABLES, scope=self._vs.name)
+      ext_restorer = tf.train.Saver(extract_vars)
+      ext_ckpt_state = tf.train.get_checkpoint_state(FLAGS.pretrain_dir)
+      if not (ext_ckpt_state and ext_ckpt_state.model_checkpoint_path):
+        ext_restorer = None
+
+      def load_pretrain(sess):
+        coh_restorer.restore(sess, coh_ckpt_state.model_checkpoint_path)
+        if ext_restorer:
+          ext_restorer.restore(sess, ext_ckpt_state.model_checkpoint_path)
+    else:
+      load_pretrain = None
+
+    saver = tf.train.Saver(max_to_keep=FLAGS.max_to_keep)
+    sv = tf.train.Supervisor(
+        logdir=FLAGS.ckpt_root,
+        saver=saver,
+        summary_op=None,
+        save_summaries_secs=FLAGS.checkpoint_secs,
+        save_model_secs=FLAGS.checkpoint_secs,
+        global_step=self.global_step,
+        init_fn=load_pretrain)  # TODO: could exploit more Supervisor features
+
+    config = tf.ConfigProto(allow_soft_placement=True)
+    # Turn on JIT compilation if necessary
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    sess = sv.prepare_or_wait_for_session(config=config)
+
+    # Summary dir is different from ckpt_root to avoid conflict.
+    summary_writer = tf.summary.FileWriter(FLAGS.summary_dir)
+
+    # Start the training loop
+    self.train_loop(sess, data_batcher, valid_batcher, summary_writer)
+
+    sv.Stop()
 
   def decode_get_feats(self, sess, enc_batch, enc_doc_lens, enc_sent_lens,
                        sent_rel_pos):
