@@ -19,6 +19,7 @@ import sys
 import time
 import numpy as np
 import tensorflow as tf
+# import pdb
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -164,7 +165,7 @@ class SummaRuNNerRFDecoder(object):
     """Beam search decoding.
 
     Args:
-      model: the SummaRuNNerRF model.
+      model: the model object.
       beam_size: int.
     """
     self._model = model
@@ -226,19 +227,19 @@ class SummaRuNNerRFDecoder(object):
     return output_fn
 
 
-class SummaRuNNerDecoder(object):
-  """Beam search decoder."""
+class TopKDecoder(object):
+  """Top-k decoder."""
 
-  def __init__(self, model, hps):
+  def __init__(self, model, batch_size):
     """Beam search decoding.
 
     Args:
-      model: the SummaRuNNer model.
-      hps: hyperparamters.
+      model: the model object.
+      batch_size: batch size.
     """
     self._model = model
     self._model.build_graph()
-    self._hps = hps
+    self._bs = batch_size
 
   def decode(self, batch_reader, extract_topk):
     """Decoding loop for long running process."""
@@ -248,31 +249,29 @@ class SummaRuNNerDecoder(object):
     # Restore the saved checkpoint model
     ckpt_state = tf.train.get_checkpoint_state(FLAGS.ckpt_root)
     if not (ckpt_state and ckpt_state.model_checkpoint_path):
-      tf.logging.info('No model to decode at %s', FLAGS.ckpt_root)
-      return False
+      raise ValueError("No model to decode at %s" % FLAGS.ckpt_root)
 
     tf.logging.info('Checkpoint path %s', ckpt_state.model_checkpoint_path)
     ckpt_path = os.path.join(FLAGS.ckpt_root,
                              os.path.basename(ckpt_state.model_checkpoint_path))
-    tf.logging.info('Renamed checkpoint path %s', ckpt_path)
     saver.restore(sess, ckpt_path)
 
     model = self._model
-    hps = self._hps
     result_list = []
+    # pdb.set_trace()
     # Run decoding for data samples
     for next_batch in batch_reader:
-      document_sents = next_batch.others[0]
-      summary_sents = next_batch.others[1]
+      document_strs = next_batch.others[0]
+      summary_strs = next_batch.others[1]
       doc_lens = next_batch.enc_doc_lens
 
       probs = model.get_extract_probs(sess, next_batch)
 
-      for i in xrange(hps.batch_size):
+      for i in xrange(self._bs):
         doc_len = doc_lens[i]
         probs_i = probs[i, :].tolist()[:doc_len]
-        decoded_str = self._DecodeTopK(document_sents[i], probs_i, extract_topk)
-        summary_str = sentence_sep.join(summary_sents[i])
+        decoded_str = self._DecodeTopK(document_strs[i], probs_i, extract_topk)
+        summary_str = summary_strs[i]
 
         result_list.append(" ".join(
             [sys_tag, decoded_str, ref_tag, summary_str]) + "\n")
@@ -300,7 +299,7 @@ class SummaRuNNerDecoder(object):
       top_k: number of sentence extracted.
     """
     topk_ids = arg_topk(probs, top_k)
-    extracted_sents = [document[i] for i in topk_ids]
-    decoded_output = sentence_sep.join(extracted_sents)
+    doc_sents = document.split(sentence_sep)
+    decoded_output = sentence_sep.join([doc_sents[i] for i in topk_ids])
 
     return decoded_output

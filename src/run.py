@@ -167,6 +167,7 @@ def main():
     shuffle_batches = False  # do not shuffle the batches
     batcher_hps = hps._replace(batch_size=1)  # ensure all examples are used
     batch_reader.BUCKET_NUM_BATCH = 1  # ensure all examples are used
+    batch_reader.GET_TIMEOUT = 60
 
   # Create data reader
   if model_type in ["summarunner", "summarunner_rf", "cohere_extract"]:
@@ -236,11 +237,11 @@ def main():
     model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
     model.train(batcher, valid_batcher)  # start training
   elif FLAGS.mode == "decode":
-    if model_type == "summarunner":
-      from utils.decode import SummaRuNNerDecoder
+    if model_type in ["summarunner", "cohere_extract"]:
+      from utils.decode import TopKDecoder
       hps = hps._replace(batch_size=1)
       model = Model(hps, input_vocab, num_gpus=FLAGS.num_gpus)
-      decoder = SummaRuNNerDecoder(model, hps)
+      decoder = TopKDecoder(model, batch_size=1)
       output_fn = decoder.decode(batcher, FLAGS.extract_topk)
       evaluate.eval_rouge(output_fn)
     elif model_type == "summarunner_rf":

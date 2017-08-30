@@ -718,6 +718,22 @@ class CoherentExtract(object):
 
     sv.Stop()
 
+  def get_extract_probs(self, sess, batch):
+    enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, _ = batch
+
+    to_return = self._extract_probs  # [batch_size, num_sents_doc, 2]
+    results = sess.run(
+        to_return,
+        feed_dict={
+            self._inputs: enc_batch,
+            self._input_sent_lens: enc_sent_lens,
+            self._input_doc_lens: enc_doc_lens,
+            self._input_rel_pos: sent_rel_pos
+        })
+
+    probs = results[:, :, 1]  # acquire the probability of extraction=1
+    return probs
+
   def get_global_step(self, sess):
     """Get the current number of training steps."""
     return sess.run(self.global_step)
