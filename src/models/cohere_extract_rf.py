@@ -16,6 +16,8 @@
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf
+from multiprocessing import Pool
+
 import lib
 
 FLAGS = tf.app.flags.FLAGS
@@ -71,8 +73,6 @@ def CreateHParams():
   """Create Hyper-parameters from tf.app.flags.FLAGS"""
 
   assert FLAGS.mode in ["train", "decode"], "Invalid mode."
-  if not any([x in hps.train_modefor for x in ["sl", "rouge", "coherence"]]):
-    raise ValueError("Invalid train mode.")
 
   hps = HParams(
       mode=FLAGS.mode,
@@ -119,6 +119,10 @@ class CoherentExtractRF(object):
     self._input_vocab = input_vocab
     self._num_gpus = num_gpus
 
+    if hps.mode == "train" and not any(
+        [x in hps.train_mode for x in ["sl", "rouge", "coherence"]]):
+      raise ValueError("Invalid train mode.")
+
   def build_graph(self):
     self._allocate_devices()
     self._add_placeholders()
@@ -126,10 +130,10 @@ class CoherentExtractRF(object):
     self.global_step = tf.Variable(0, name="global_step", trainable=False)
 
     if self._hps.mode == "train":
+      if "rouge" in self._hps.train_mode:
+        self._pool = Pool(15)
       self._add_loss()
       self._add_train_op()
-      if "rouge " in self._hps.train_mode:
-        self._pool = Pool(15)
 
     self._summaries = tf.summary.merge_all()
 
@@ -257,11 +261,11 @@ class CoherentExtractRF(object):
                 extract_prob_list, axis=1)  # [batch_size, num_sents_doc, 2]
 
           if "rouge" in hps.train_mode or "coherence" in hps.train_mode:
-            rl_hist_summary = tf.zeros_like(sentence_vecs_list[0])
+            rl_hist_summary = tf.zeros_like(sent_vecs_list[0])
             rl_extract_logit_list, sampled_extract_list = [], []
 
             for i in xrange(hps.num_sents_doc):
-              cur_sent_vec = sentence_vecs_list[i]
+              cur_sent_vec = sent_vecs_list[i]
               cur_abs_pos = abs_pos_emb_list[i]
               cur_rel_pos = rel_pos_emb_list[i]
 
@@ -450,16 +454,18 @@ class CoherentExtractRF(object):
         tf.summary.scalar("rouge_reward", tf.reduce_mean(rouge_rewards))
         rewards = rouge_rewards * hps.rouge_coef
 
-      if "coherence" in hps.train_mode:
-        coherence_rewards = self._get_coherence_rewards()
-        coherence_rewards.set_shape([hps.batch_size])
-        tf.summary.scalar("coherence_reward", tf.reduce_mean(coherence_rewards))
-        if rewards:
-          rewards += coherence_rewards * hps.coherence_coef
-        else:
-          rewards = coherence_rewards * hps.coherence_coef
+    # Exit "loss" scope for definition of coherence model
+    if "coherence" in hps.train_mode:
+      coherence_rewards = self._get_coherence_rewards()
+      coherence_rewards.set_shape([hps.batch_size])
+      tf.summary.scalar("coherence_reward", tf.reduce_mean(coherence_rewards))
+      if rewards is not None:
+        rewards += coherence_rewards * hps.coherence_coef
+      else:
+        rewards = coherence_rewards * hps.coherence_coef
 
-      if rewards:
+    with tf.variable_scope("loss"), tf.device(self._device_0):
+      if rewards is not None:
         self._avg_reward = tf.reduce_mean(rewards)
 
         # Discount factor=1.0, and hence return is same with final reward
@@ -478,7 +484,7 @@ class CoherentExtractRF(object):
             tf.to_float(self._input_doc_lens))
         rl_loss = tf.reduce_mean(batch_loss)
         tf.summary.scalar("rl_loss", rl_loss)
-        if loss:
+        if loss is not None:
           loss += rl_loss
         else:
           loss = rl_loss
@@ -520,6 +526,7 @@ class CoherentExtractRF(object):
         Tout=[tf.int32, tf.int32, tf.int32],
         stateful=False,
         name="convert_to_coherence_format")
+    states.set_shape([hps.batch_size])
 
     # Step 2: add the coherence model to computation graph
     coherence_model = coherence.CoherenceModel(
@@ -532,7 +539,7 @@ class CoherentExtractRF(object):
         self._convert_to_reward, [coh_prob, states],
         Tout=tf.float32,
         stateful=False,
-        name="convert_to_reward")  # [batch_size, coh_samples]
+        name="convert_to_reward")  # [batch_size]
 
     return rewards
 

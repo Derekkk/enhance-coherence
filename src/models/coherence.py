@@ -193,7 +193,7 @@ class CoherenceModel(object):
                   1,
                   activation_fn=None,
                   weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
-                  scope="fc_output"))  # [batch_size]
+                  scope="fc_output"), axis=1)  # [batch_size]
           self._output_prob = tf.sigmoid(self._output_logit)  # [batch_size]
 
   def _add_loss(self):

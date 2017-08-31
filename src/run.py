@@ -143,6 +143,9 @@ def main():
   elif model_type == "cohere_extract":
     from models.cohere_extract import CreateHParams
     from models.cohere_extract import CoherentExtract as Model
+  elif model_type == "cohere_extract_rf":
+    from models.cohere_extract_rf import CreateHParams
+    from models.cohere_extract_rf import CoherentExtractRF as Model
   elif model_type == "seqmatch":
     from models.seqmatch import CreateHParams, TrainLoop  #TODO: update API
     from models.seqmatch import SeqMatchNet as Model
