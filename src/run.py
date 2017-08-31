@@ -251,7 +251,7 @@ def main():
       decoder = TopKDecoder(model, batch_size=1)
       output_fn = decoder.decode(batcher, FLAGS.extract_topk)
       evaluate.eval_rouge(output_fn)
-    elif model_type == "summarunner_rf":
+    elif model_type in ["summarunner_rf", "cohere_extract_rf"]:
       from utils.decode import SummaRuNNerRFDecoder
       model = Model(
           hps._replace(batch_size=None),  # to allow variable batch_size

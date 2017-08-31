@@ -293,13 +293,13 @@ class CoherentExtractRF(object):
 
         else:  # decode mode
           self._cur_sent_vec = tf.placeholder(tf.float32,
-                                              sentence_vecs_list[0].get_shape())
+                                              sent_vecs_list[0].get_shape())
           self._cur_abs_pos = tf.placeholder(tf.float32,
                                              abs_pos_emb_list[0].get_shape())
           self._cur_rel_pos = tf.placeholder(tf.float32,
                                              rel_pos_emb_list[0].get_shape())
           self._hist_summary = tf.placeholder(tf.float32,
-                                              sentence_vecs_list[0].get_shape())
+                                              sent_vecs_list[0].get_shape())
 
           extract_logit = self._compute_extract_prob(
               self._cur_sent_vec, self._cur_abs_pos, self._cur_rel_pos,

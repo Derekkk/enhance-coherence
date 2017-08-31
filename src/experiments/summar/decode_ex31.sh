@@ -1,27 +1,14 @@
 export CUDA_VISIBLE_DEVICES=1
 python run.py \
   --model=cohere_extract_rf \
-  --data_path=data/cnndaily/training_shuf.pkl \
+  --data_path=data/cnndaily/test.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex24 \
-  --summary_dir=log/cnndaily/summar/ex24 \
-  --mode=train \
-  --train_mode='sl' \
-  --lr 0.5 \
-  --min_lr 0.01 \
-  --decay_step 30000 \
-  --decay_rate 0.8 \
-  --dropout 0.1 \
-  --batch_size 64 \
-  --max_run_steps 200000 \
-  --display_freq 100 \
-  --valid_path=data/cnndaily/validation_shuf.pkl \
-  --valid_freq 1000 \
-  --checkpoint_secs 1200 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex31 \
+  --mode=decode \
+  --batch_size 10 \
   --use_bucketing False \
   --truncate_input True \
-  --min_num_input_sents 3 \
   --emb_dim 128 \
   --num_sents_doc 80 \
   --num_words_sent 50 \
@@ -33,4 +20,5 @@ python run.py \
   --word_conv_widths '3,5,7' \
   --word_conv_filters '128,256,256' \
   --mlp_num_hiddens '512,256' \
+  --decode_dir=out/cnndaily/summar/ex31 \
 
