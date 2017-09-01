@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 python run.py \
   --model=cohere_extract_rf \
   --data_path=data/cnndaily/training_shuf.pkl \

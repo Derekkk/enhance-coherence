@@ -41,6 +41,13 @@ SentencePairBatch = namedtuple('SentencePairBatch',
                                'sents_A, sents_B, lengths_A, lengths_B,'
                                'labels')
 
+SentenceTriplet = namedtuple('SentenceTriplet',
+                             'sent_A, sent_B_pos, sent_B_neg,'
+                             'length_A, length_B_pos, length_B_neg')
+SentenceTripletBatch = namedtuple('SentenceTripletBatch',
+                                  'sents_A, sents_B_pos, sents_B_neg,'
+                                  'lengths_A, lengths_B_pos, lengths_B_neg')
+
 SentenceBlock = namedtuple('SentenceBlock', 'sent_input, length, label')
 SentenceBlockBatch = namedtuple('SentenceBlockBatch',
                                 'sent_inputs, lengths, labels')
@@ -48,7 +55,7 @@ SentenceBlockBatch = namedtuple('SentenceBlockBatch',
 # Note(jimmycode): refer to run.py for definition of DocSummary, DocSummaryCount
 
 QUEUE_NUM_BATCH = 100  # Number of batches kept in the queue
-BUCKET_NUM_BATCH = 10  # Number of batches per bucketing iteration fetches
+BUCKET_NUM_BATCH = 20  # Number of batches per bucketing iteration fetches
 GET_TIMEOUT = 240
 SAMPLE_PATIENCE = 10  # Maximum number of sample failures, to avoid infinite loop
 sentence_sep = "</s>"
@@ -81,6 +88,28 @@ def neg_samp_pairs(sequence, size=0):
 
   neg_samples = [(sequence[i], sequence[j]) for i, j in neg_samples_set]
   return neg_samples
+
+
+def sample_triplets(sequence, seq_len=1000, window_size=None):
+  """
+  Returns:
+    triplets: a list of three-element tuples
+  """
+  triplets = []
+  seq_len = min(seq_len, len(sequence))
+  if not window_size:
+    window_size = seq_len - 1  # full size
+
+  for i in xrange(-1, seq_len):
+    if i + 1 < seq_len:
+      for j in xrange(i + 2, i + window_size + 2):
+        if j < seq_len:
+          triplets.append((i, i + 1, j))
+
+      if i > 0:
+        triplets.append((i, i + 1, i))
+
+  return triplets
 
 
 class ExtractiveBatcher(object):
@@ -455,6 +484,97 @@ class SentencePairBatcher(ExtractiveBatcher):
     return SentencePairBatch(stacked_fields[0], stacked_fields[1],
                              stacked_fields[2], stacked_fields[3],
                              stacked_fields[4])
+
+
+class SentenceTripletBatcher(SentencePairBatcher):
+  """Batch reader for sequence matching model."""
+
+  def _FillInputQueue(self, data_path):
+    """Fill input queue with ExtractiveSample."""
+    hps = self._hps
+    enc_vocab = self._enc_vocab
+    enc_pad_id = enc_vocab.pad_id
+    enc_start_id = enc_vocab.start_id
+    start_sent = [enc_start_id] * hps.max_sent_len
+
+    data_generator = self._DataGenerator(data_path, self._num_epochs)
+
+    # pdb.set_trace()
+    for data_sample in data_generator:  # type(data_sample): DocSummary
+      document = data_sample.document
+      summary = data_sample.summary
+
+      summary_triplets = sample_triplets(summary)
+      summary_triplets = random.sample(summary_triplets,
+                                       min(2, len(summary_triplets)))
+
+      doc_triplets = sample_triplets(document, window_size=9)
+      doc_triplets = random.sample(doc_triplets, min(14, len(doc_triplets)))
+
+      all_triplets = []
+      for t in summary_triplets:
+        all_triplets.append((0, t))
+      for t in doc_triplets:
+        all_triplets.append((1, t))
+      shuffle(all_triplets)
+
+      # Convert format and add to queue
+      for src_id, (sent_A_id, sent_B_pos_id, sent_B_neg_id) in all_triplets:
+        source = document if src_id else summary
+
+        if sent_A_id < 0:
+          sent_A_wids = start_sent
+        else:
+          sent_A_wids = enc_vocab.GetIds(source[sent_A_id])
+
+        sent_B_pos_wids = enc_vocab.GetIds(source[sent_B_pos_id])
+        sent_B_neg_wids = enc_vocab.GetIds(source[sent_B_neg_id])
+
+        length_A = len(sent_A_wids)
+        length_B_pos = len(sent_B_pos_wids)
+        length_B_neg = len(sent_B_neg_wids)
+
+        if length_A >= hps.max_sent_len:
+          sent_A_wids = sent_A_wids[:hps.max_sent_len]
+        else:
+          sent_A_wids += [enc_pad_id] * (hps.max_sent_len - length_A)
+
+        if length_B_pos >= hps.max_sent_len:
+          sent_B_pos_wids = sent_B_pos_wids[:hps.max_sent_len]
+        else:
+          sent_B_pos_wids += [enc_pad_id] * (hps.max_sent_len - length_B_pos)
+
+        if length_B_neg >= hps.max_sent_len:
+          sent_B_neg_wids = sent_B_neg_wids[:hps.max_sent_len]
+        else:
+          sent_B_neg_wids += [enc_pad_id] * (hps.max_sent_len - length_B_neg)
+
+        np_sent_A = np.array(sent_A_wids, dtype=np.int32)
+        np_sent_B_pos = np.array(sent_B_pos_wids, dtype=np.int32)
+        np_sent_B_neg = np.array(sent_B_neg_wids, dtype=np.int32)
+
+        element = SentenceTriplet(np_sent_A, np_sent_B_pos, np_sent_B_neg,
+                                  length_A, length_B_pos, length_B_neg)
+        self._sample_queue.put(element)
+
+  def _PackBatch(self, batch):
+    """ Pack the batch into numpy arrays.
+
+    Returns:
+        model_batch: ExtractiveBatch
+    """
+    hps = self._hps
+    field_lists = [[], [], [], [], [], []]
+
+    for ex in batch:
+      for i in range(6):
+        field_lists[i].append(ex[i])
+
+    stacked_fields = [np.stack(field, axis=0) for field in field_lists]
+
+    return SentenceTripletBatch(stacked_fields[0], stacked_fields[1],
+                                stacked_fields[2], stacked_fields[3],
+                                stacked_fields[4], stacked_fields[5])
 
 
 class SentenceBlockBatcher(SentencePairBatcher):

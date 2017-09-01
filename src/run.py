@@ -24,7 +24,7 @@ tf.app.flags.DEFINE_integer("batch_size", 1,
 # ----------- Train mode related flags ------------------
 tf.app.flags.DEFINE_float("lr", 0.15, "Initial learning rate.")
 tf.app.flags.DEFINE_float("min_lr", 0.01, "Minimum learning rate.")
-tf.app.flags.DEFINE_float("max_grad_norm", 0.4,
+tf.app.flags.DEFINE_float("max_grad_norm", 1.0,
                           "Maximum gradient norm for gradient clipping.")
 tf.app.flags.DEFINE_integer("decay_step", 30000, "Exponential decay step.")
 tf.app.flags.DEFINE_float("decay_rate", 0.1, "Exponential decay rate.")
@@ -103,12 +103,25 @@ tf.app.flags.DEFINE_string("pretrain_dir", "",
 tf.app.flags.DEFINE_float("rouge_coef", 1.0,
                           "Coefficient of ROUGE loss in REINFORCE.")
 # ----------- seqmatch related flags ----------------
-tf.app.flags.DEFINE_integer("num_hidden", 256,
-                            "Number of hidden units in encoder RNN.")
+tf.app.flags.DEFINE_string("seqmatch_type", "conv_match",
+                           "Type of sequence matching architecture.")
 tf.app.flags.DEFINE_integer("max_sent_len", 50, "Maximum length of sentences.")
-tf.app.flags.DEFINE_string("conv_filters", 256, "Number of filters in the CNN.")
-tf.app.flags.DEFINE_string("conv_width", 3, "Width of convolution kernel.")
-tf.app.flags.DEFINE_string("maxpool_width", 2, "Width of max-pooling.")
+tf.app.flags.DEFINE_integer("sm_emb_dim", 128, "Dim of word embedding.")
+tf.app.flags.DEFINE_integer("sm_gru_num_units", 256,
+                            "Number of hidden units in encoder RNN.")
+tf.app.flags.DEFINE_float("sm_margin", 0.5, "Margin for ranking loss")
+tf.app.flags.DEFINE_integer("sm_conv1d_filter", 128,
+                            "Number of filters for conv1d.")
+tf.app.flags.DEFINE_integer("sm_conv1d_width", 3, "Width of conv1d.")
+tf.app.flags.DEFINE_string("sm_conv_filters", "256",
+                           "Number of filters in the CNN.")
+tf.app.flags.DEFINE_string("sm_conv_heights", "3",
+                           "Width of convolution kernel.")
+tf.app.flags.DEFINE_string("sm_conv_widths", "3",
+                           "Width of convolution kernel.")
+tf.app.flags.DEFINE_string("sm_maxpool_widths", "2", "Width of max-pooling.")
+tf.app.flags.DEFINE_string("sm_fc_num_units", "256",
+                           "Number of units in FC layers.")
 # ----------- coherence related flags ----------------
 tf.app.flags.DEFINE_integer("coh_emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("max_num_sents", 6, "Maximum number of sentences.")
@@ -147,7 +160,7 @@ def main():
     from models.cohere_extract_rf import CreateHParams
     from models.cohere_extract_rf import CoherentExtractRF as Model
   elif model_type == "seqmatch":
-    from models.seqmatch import CreateHParams, TrainLoop  #TODO: update API
+    from models.seqmatch import CreateHParams
     from models.seqmatch import SeqMatchNet as Model
   elif model_type == "coherence":
     from models.coherence import CreateHParams
@@ -198,7 +211,7 @@ def main():
           shuffle_batches=shuffle_batches)
 
   elif model_type == "seqmatch":
-    batcher = batch_reader.SentencePairBatcher(
+    batcher = batch_reader.SentenceTripletBatcher(
         FLAGS.data_path,
         input_vocab,
         batcher_hps,
@@ -208,7 +221,7 @@ def main():
         shuffle_batches=shuffle_batches)
     if FLAGS.mode == "train":
       # Create validation data reader
-      valid_batcher = batch_reader.SentencePairBatcher(
+      valid_batcher = batch_reader.SentenceTripletBatcher(
           FLAGS.valid_path,
           input_vocab,
           batcher_hps,
