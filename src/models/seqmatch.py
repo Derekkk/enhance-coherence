@@ -259,6 +259,7 @@ class SeqMatchNet(BaseModel):
 
     """
     hps = self._hps
+    is_training = hps.mode == "train"
 
     with tf.variable_scope('conv_match', reuse=reuse):
       # Part 1: conv1d
@@ -277,6 +278,8 @@ class SeqMatchNet(BaseModel):
             activation=tf.nn.relu,
             kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
             name="sent_A_conv1d_layer1")
+        sent_A_conv1d_out = tf.layers.dropout(
+            sent_A_conv1d_out, hps.dropout, training=is_training)
 
         # Second sentence with conv-1D in layer 1
         sent_B_mask = tf.expand_dims(
@@ -292,6 +295,8 @@ class SeqMatchNet(BaseModel):
             activation=tf.nn.relu,
             kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
             name="sent_B_conv1d_layer1")
+        sent_B_conv1d_out = tf.layers.dropout(
+            sent_B_conv1d_out, hps.dropout, training=is_training)
 
         # Extend and concat the feature maps into 2D
         sent_B_conv1d_out_list = tf.unstack(sent_B_conv1d_out, axis=1)
@@ -319,6 +324,9 @@ class SeqMatchNet(BaseModel):
               activation=tf.nn.relu,
               kernel_initializer=tf.random_uniform_initializer(-0.1, 0.1),
               name="conv2d_layer_%d" % (i + 1))
+
+          conv2d_feats = tf.layers.dropout(
+              conv2d_feats, hps.dropout, training=is_training)
 
           if mw:
             conv2d_feats = tf.layers.max_pooling2d(

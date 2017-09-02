@@ -71,7 +71,7 @@ class BaseModel(object):
     raise NotImplementedError()
     self._loss = 0
 
-  def _add_train_op(self):
+  def _add_train_op(self, optimizer_class=tf.train.GradientDescentOptimizer):
     hps = self._hps
 
     self._lr_rate = tf.maximum(
@@ -88,7 +88,7 @@ class BaseModel(object):
       tf.summary.scalar("global_norm", global_norm)
 
       # Create optimizer and train ops
-      optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
+      optimizer = optimizer_class(self._lr_rate)
       self._train_op = optimizer.apply_gradients(
           zip(grads, tvars), global_step=self.global_step, name="train_step")
 

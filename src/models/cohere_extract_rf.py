@@ -513,7 +513,8 @@ class CoherentExtractRF(object):
     hps = self._hps
 
     import coherence
-    self._coh_hps = coherence.CreateHParams()._replace(batch_size=None)
+    self._coh_hps = coherence.CreateHParams()._replace(
+        batch_size=None, mode="decode")  #NB: not train mode
     assert hps.num_words_sent == self._coh_hps.max_sent_len, \
         "num_words_sent must equal to max_sent_len"
 
