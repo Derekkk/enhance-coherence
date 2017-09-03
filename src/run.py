@@ -102,6 +102,8 @@ tf.app.flags.DEFINE_string("pretrain_dir", "",
 # ----------- cohere_extract_rf related flags ----------------
 tf.app.flags.DEFINE_float("rouge_coef", 1.0,
                           "Coefficient of ROUGE loss in REINFORCE.")
+tf.app.flags.DEFINE_float("coh_reward_clip", 3.0,
+                          "Maximum coherence reward for reward clipping.")
 # ----------- seqmatch related flags ----------------
 tf.app.flags.DEFINE_string("seqmatch_type", "conv_match",
                            "Type of sequence matching architecture.")

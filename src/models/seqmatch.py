@@ -64,8 +64,8 @@ class SeqMatchNet(BaseModel):
       Retrieval-based Chatbots. arXiv:1612.01627 [Cs].
 
   [2] Hu, B., Lu, Z., Li, H., & Chen, Q. (2014). Convolutional neural network
-      architectures for matching natural language sentences. In Advances in neural
-      information processing systems (pp. 2042-2050).
+      architectures for matching natural language sentences. In Advances in
+      neural information processing systems (pp. 2042-2050).
   """
 
   def __init__(self, hps, vocab, num_gpus=1):
@@ -89,6 +89,31 @@ class SeqMatchNet(BaseModel):
 
     self._summaries = tf.summary.merge_all()
 
+  def inference_graph(self, sents_A, sents_B, lengths_A, lengths_B, device):
+    hps = self._hps
+
+    sents_A.set_shape([None, hps.max_sent_len])
+    sents_B.set_shape([None, hps.max_sent_len])
+    lengths_A.set_shape([None])
+    lengths_B.set_shape([None])
+
+    with tf.variable_scope("seq_match") as vs, tf.device(device):
+      with tf.variable_scope('embeddings'):
+        self._add_embeddings()
+
+        sent_A_embed = tf.nn.embedding_lookup(
+            self._embed, sents_A)  #[?,max_sent_len,sm_emb_dim]
+        sent_B_embed = tf.nn.embedding_lookup(
+            self._embed, sents_B)  #[?,max_sent_len,sm_emb_dim]
+
+      if hps.seqmatch_type == "conv_match":
+        output = self._add_conv_match(sent_A_embed, sent_B_embed, lengths_A,
+                                      lengths_B)
+      else:
+        raise NotImplementedError()
+
+    return output, vs
+
   def _add_placeholders(self):
     hps = self._hps
 
@@ -101,24 +126,28 @@ class SeqMatchNet(BaseModel):
     self._sents_B_neg = tf.placeholder(tf.int32, [None, hps.max_sent_len])
     self._lengths_B_neg = tf.placeholder(tf.int32, [None])
 
+  def _add_embeddings(self):
+    vsize = self._vocab.NumIds
+    self._embed = tf.get_variable(
+        'embedding', [vsize, self._hps.sm_emb_dim],
+        initializer=tf.truncated_normal_initializer(stddev=1e-4))
+
   def _build_model(self):
     hps = self._hps
-    vsize = self._vocab.NumIds
 
     with tf.variable_scope("seq_match"), tf.device(self._device_0):
       with tf.variable_scope('embeddings'):
-        embedding = tf.get_variable(
-            'embedding', [vsize, hps.sm_emb_dim],
-            initializer=tf.truncated_normal_initializer(stddev=1e-4))
+        self._add_embeddings()
 
         sent_A_embed = tf.nn.embedding_lookup(
-            embedding, self._sents_A)  #[?,max_sent_len,sm_emb_dim]
+            self._embed, self._sents_A)  #[?,max_sent_len,sm_emb_dim]
         sent_B_pos_embed = tf.nn.embedding_lookup(
-            embedding, self._sents_B_pos)  #[?,max_sent_len,sm_emb_dim]
+            self._embed, self._sents_B_pos)  #[?,max_sent_len,sm_emb_dim]
         sent_B_neg_embed = tf.nn.embedding_lookup(
-            embedding, self._sents_B_neg)  #[?,max_sent_len,sm_emb_dim]
+            self._embed, self._sents_B_neg)  #[?,max_sent_len,sm_emb_dim]
 
       if hps.seqmatch_type == "smn":
+        raise NotImplementedError()
         self._output_pos = self._add_smn(sent_A_embed, sent_B_pos_embed,
                                          self._lengths_A, self._lengths_B_pos)
         self._output_neg = self._add_smn(sent_A_embed, sent_B_neg_embed,
@@ -340,7 +369,7 @@ class SeqMatchNet(BaseModel):
           mlp_hidden = tf.contrib.layers.fully_connected(
               mlp_hidden,
               n,
-              activation_fn=tf.nn.relu,  # tf.tanh/tf.sigmoid
+              activation_fn=tf.nn.relu,  # tf.tanh/tf.sigmoid/tf.nn.relu
               weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
               scope="fc_layer_%d" % (i + 1))
 
@@ -348,10 +377,11 @@ class SeqMatchNet(BaseModel):
             tf.contrib.layers.fully_connected(
                 mlp_hidden,
                 1,
-                activation_fn=tf.sigmoid,
+                activation_fn=tf.tanh,  # tf.sigmoid
                 weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
                 scope="fc_layer_output"),
             axis=1)  # [?]
+        # NB: use tanh instead of sigmoid because it centers at 0
 
     return prob
 

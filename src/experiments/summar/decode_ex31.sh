@@ -4,7 +4,7 @@ python run.py \
   --data_path=data/cnndaily/test.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex31 \
+  --ckpt_root=checkpoints/archive/cnndaily/summar/ex31 \
   --mode=decode \
   --batch_size 10 \
   --use_bucketing False \

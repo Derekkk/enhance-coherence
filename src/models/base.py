@@ -14,12 +14,9 @@
 # ==============================================================================
 
 from collections import namedtuple
-import numpy as np
 import tensorflow as tf
-import lib
 
 FLAGS = tf.app.flags.FLAGS
-
 # NB: batch_size is not given (None) when deployed as a critic.
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "max_grad_norm, decay_step, decay_rate")

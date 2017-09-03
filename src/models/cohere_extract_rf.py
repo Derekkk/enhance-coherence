@@ -17,10 +17,8 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 from multiprocessing import Pool
-
 import lib
-
-FLAGS = tf.app.flags.FLAGS
+from base import BaseModel
 
 # Import pythonrouge package
 from pythonrouge import PythonROUGE
@@ -47,6 +45,10 @@ rouge = PythonROUGE(
     favor=False,
     p=0.5)
 
+rouge_weights = [0.4, 1.0, 0.5]
+
+# rouge_weights = [0.5, 1.0, 0.6]
+
 
 def compute_rouge(item):
   system_sents = item[0]
@@ -54,11 +56,13 @@ def compute_rouge(item):
 
   rouge_dict = rouge.evaluate(
       [[system_sents]], [[reference_sents]], to_dict=True, f_measure_only=True)
-  weighted_rouge = (rouge_dict["ROUGE-1"] * 0.4 + rouge_dict["ROUGE-2"] +
-                    rouge_dict["ROUGE-L"] * 0.5) / 3.0
+  weighted_rouge = (rouge_dict["ROUGE-1"] * rouge_weights[0] +
+                    rouge_dict["ROUGE-2"] * rouge_weights[1] +
+                    rouge_dict["ROUGE-L"] * rouge_weights[2]) / 3.0
   return weighted_rouge
 
 
+FLAGS = tf.app.flags.FLAGS
 # NB: batch_size could be unspecified (None) in decode mode
 HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "num_sents_doc, num_words_sent, rel_pos_max_idx,"
@@ -66,7 +70,7 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "doc_repr_dim, word_conv_widths, word_conv_filters,"
                      "mlp_num_hiddens, train_mode, coherence_coef,"
                      "rouge_coef, min_num_input_sents, trg_weight_norm,"
-                     "max_grad_norm, decay_step, decay_rate")
+                     "max_grad_norm, decay_step, decay_rate, coh_reward_clip")
 
 
 def CreateHParams():
@@ -98,20 +102,22 @@ def CreateHParams():
       decay_step=FLAGS.decay_step,
       decay_rate=FLAGS.decay_rate,
       coherence_coef=FLAGS.coherence_coef,  # coefficient of coherence loss
-      rouge_coef=FLAGS.rouge_coef)  # coefficient of ROUGE loss
+      rouge_coef=FLAGS.rouge_coef,  # coefficient of ROUGE loss
+      coh_reward_clip=FLAGS.coh_reward_clip)
   return hps
 
 
-class CoherentExtractRF(object):
+class CoherentExtractRF(BaseModel):
   """ An extractive summarization model based on SummaRuNNer that is enhanced
-      with REINFORCE by ROUGE and local coherence. Related works are listed:
+      with REINFORCE by ROUGE and coherence model. Related works are listed:
 
   [1] Nallapati, R., Zhai, F., & Zhou, B. (2016). SummaRuNNer: A Recurrent
       Neural Network based Sequence Model for Extractive Summarization of
       Documents. arXiv:1611.04230 [Cs].
 
-  [2] Li, J., & Hovy, E. H. (2014). A Model of Coherence Based on
-      Distributed Sentence Representation. In EMNLP (pp. 2039-2048).
+  [2] Hu, B., Lu, Z., Li, H., & Chen, Q. (2014). Convolutional neural network
+      architectures for matching natural language sentences. In Advances in
+      neural information processing systems (pp. 2042-2050).
   """
 
   def __init__(self, hps, input_vocab, num_gpus=0):
@@ -420,9 +426,9 @@ class CoherentExtractRF(object):
 
   def _add_loss(self):
     hps = self._hps
+    loss = None
 
     with tf.variable_scope("loss"), tf.device(self._device_0):
-      loss = None
       loss_mask = tf.sequence_mask(
           self._input_doc_lens, maxlen=hps.num_sents_doc,
           dtype=tf.float32)  # [batch_size, num_sents_doc]
@@ -442,23 +448,28 @@ class CoherentExtractRF(object):
 
       rewards = None
       if "rouge" in hps.train_mode:
-        rouge_rewards = tf.py_func(
+        rouge_rewards, rouge_reward_sum = tf.py_func(
             self._get_rouge_rewards, [
                 self._sampled_extracts, self._input_doc_lens,
                 self._document_strs, self._summary_strs
             ],
-            Tout=tf.float32,
+            Tout=[tf.float32, tf.float32],
             stateful=False,
             name="rouge_reward")
-        rouge_rewards.set_shape([hps.batch_size])
-        tf.summary.scalar("rouge_reward", tf.reduce_mean(rouge_rewards))
+
+        rouge_rewards.set_shape([hps.batch_size, hps.num_sents_doc])
+        rouge_reward_sum.set_shape([hps.batch_size])
+
+        tf.summary.scalar("rouge_reward", tf.reduce_mean(rouge_reward_sum))
         rewards = rouge_rewards * hps.rouge_coef
 
     # Exit "loss" scope for definition of coherence model
     if "coherence" in hps.train_mode:
-      coherence_rewards = self._get_coherence_rewards()
-      coherence_rewards.set_shape([hps.batch_size])
-      tf.summary.scalar("coherence_reward", tf.reduce_mean(coherence_rewards))
+      coherence_rewards, coh_reward_sum = self._get_coherence_rewards()
+      coherence_rewards.set_shape([hps.batch_size, hps.num_sents_doc])
+      coh_reward_sum.set_shape([hps.batch_size])
+
+      tf.summary.scalar("coherence_reward", tf.reduce_mean(coh_reward_sum))
       if rewards is not None:
         rewards += coherence_rewards * hps.coherence_coef
       else:
@@ -466,11 +477,16 @@ class CoherentExtractRF(object):
 
     with tf.variable_scope("loss"), tf.device(self._device_0):
       if rewards is not None:
-        self._avg_reward = tf.reduce_mean(rewards)
+        self._avg_reward = tf.reduce_mean(tf.reduce_sum(rewards, 1))
 
-        # Discount factor=1.0, and hence return is same with final reward
-        returns = tf.tile(tf.expand_dims(rewards, 1),
-                          [1, hps.num_sents_doc])  # [batch_size, num_sents_doc]
+        # Compute the return value by cumulating all the advantages backwards
+        rewards_list = tf.unstack(rewards, axis=1)
+        rev_returns, cumulator = [], None  # reversed list of returns
+        for r in reversed(rewards_list):
+          cumulator = r if cumulator is None else cumulator + r  # discount=1
+          rev_returns.append(cumulator)
+        returns = tf.stack(
+            list(reversed(rev_returns)), axis=1)  # [batch_size, num_sents_doc]
 
         # Compute the negative log-likelihood of chosen actions
         neg_log_probs = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -492,10 +508,10 @@ class CoherentExtractRF(object):
     tf.summary.scalar("loss", loss)
     self._loss = loss
 
-  def _get_rouge_rewards(self, sampled_targets, doc_lens, doc_strs,
+  def _get_rouge_rewards(self, sampled_extracts, doc_lens, doc_strs,
                          summary_strs):
     ext_sents_list, sum_sents_list = [], []
-    for extracts, doc_str, summary_str in zip(sampled_targets, doc_strs,
+    for extracts, doc_str, summary_str in zip(sampled_extracts, doc_strs,
                                               summary_strs):
       doc_sents = doc_str.split(sentence_sep)
       extract_sents = [s for e, s in zip(extracts, doc_sents) if e]
@@ -506,138 +522,122 @@ class CoherentExtractRF(object):
 
     rouge_scores = self._pool.map(compute_rouge,
                                   zip(ext_sents_list, sum_sents_list))
-    np_scores = np.array(rouge_scores, dtype=np.float32)
-    return np_scores
+    np_scores = np.zeros_like(sampled_extracts, dtype=np.float32)
+    for i, j in enumerate(doc_lens):
+      np_scores[i, j - 1] = rouge_scores[i]  # index starts with 0
+    np_total_scores = np.array(rouge_scores, dtype=np.float32)
+
+    return np_scores, np_total_scores
 
   def _get_coherence_rewards(self):
     hps = self._hps
 
-    import coherence
-    self._coh_hps = coherence.CreateHParams()._replace(
+    import seqmatch
+    self._sm_hps = seqmatch.CreateHParams()._replace(
         batch_size=None, mode="decode")  #NB: not train mode
-    assert hps.num_words_sent == self._coh_hps.max_sent_len, \
+    assert hps.num_words_sent == self._sm_hps.max_sent_len, \
         "num_words_sent must equal to max_sent_len"
 
     # Step 1: convert the format
-    sent_inputs, sent_lens, states = tf.py_func(
-        self._convert_to_coherence, [
+    sents_A, sents_B, lengths_A, lengths_B = tf.py_func(
+        self._convert_to_seqmatch, [
             self._sampled_extracts, self._inputs, self._input_doc_lens,
             self._input_sent_lens
         ],
-        Tout=[tf.int32, tf.int32, tf.int32],
+        Tout=[tf.int32, tf.int32, tf.int32, tf.int32],
         stateful=False,
-        name="convert_to_coherence_format")
-    states.set_shape([hps.batch_size])
+        name="convert_format")
 
     # Step 2: add the coherence model to computation graph
-    coherence_model = coherence.CoherenceModel(
-        self._coh_hps, self._input_vocab, num_gpus=1)
-    coh_prob, self._coh_vs = coherence_model.inference_graph(
-        sent_inputs, sent_lens, device=self._device_1)
+    seqmatch_model = seqmatch.SeqMatchNet(
+        self._sm_hps, self._input_vocab, num_gpus=1)
+    sm_output, self._coh_vs = seqmatch_model.inference_graph(
+        sents_A, sents_B, lengths_A, lengths_B, device=self._device_1)
 
-    # Step 3: convert the coherence probabilities to rewards and compute loss
-    rewards = tf.py_func(
-        self._convert_to_reward, [coh_prob, states],
-        Tout=tf.float32,
+    # Step 3: convert the coherence score to rewards
+    rewards, reward_sum = tf.py_func(
+        self._convert_to_reward, [sm_output, self._sampled_extracts],
+        Tout=[tf.float32, tf.float32],
         stateful=False,
         name="convert_to_reward")  # [batch_size]
 
-    return rewards
+    return rewards, reward_sum
 
-  def _convert_to_coherence(self, sampled_extracts, inputs, doc_lens,
-                            sent_lens):
+  def _convert_to_seqmatch(self, sampled_extracts, inputs, doc_lens, sent_lens):
     """
     Parameters:
       sampled_extracts: [batch_size, num_sents_doc] 0 or 1
-      inputs: [batch_size, num_sents_doc, num_words_sent]
+      inputs: [batch_size, num_sents_doc, num_words_sent/max_sent_len]
       doc_lens: [batch_size]
       sent_lens: [batch_size, num_sents_doc]
 
     Returns:
-      np_sents: [?, max_num_sents, max_sent_len]
-      np_sent_lens: [?, max_num_sents]
-      np_states: [?]
+      np_sents_A: [?, max_sent_len]
+      np_sents_B: [?, max_sent_len]
+      np_lens_A: [?]
+      np_lens_B: [?]
     """
-    coh_hps = self._coh_hps
-    max_num_sents = coh_hps.max_num_sents
-    max_sent_len = coh_hps.max_sent_len
+    hps = self._sm_hps
+    max_sent_len = hps.max_sent_len
 
-    pad_sent = np.array(
-        [self._input_vocab.pad_id] * max_sent_len, dtype=np.int32)
+    start_sent = np.array(
+        [self._input_vocab.start_id] * max_sent_len, dtype=np.int32)
 
-    ext_sents_list, states = [], []
-    for extracts, doc, doc_len, sent_len in zip(sampled_extracts, inputs,
-                                                doc_lens, sent_lens):
-      extracted_sents = [(doc[i], sent_len[i]) for i, ext in enumerate(extracts)
-                         if ext and i < doc_len]
-      if not extracted_sents:
-        states.append(0)  # Failure
-      elif len(extracted_sents) <= max_num_sents:
-        ext_sents_list.append(extracted_sents)
-        states.append(1)  # Success
-      else:
-        states.append(0)  # Failure
+    sent_A_list, sent_B_list, len_A_list, len_B_list = [], [], [], []
+    for i in xrange(sampled_extracts.shape[0]):
+      prev_idx = -1
+      for j in xrange(sampled_extracts.shape[1]):
+        if sampled_extracts[i, j]:
+          if prev_idx < 0:
+            sent_A_list.append(start_sent)
+            len_A_list.append(max_sent_len)
+          else:
+            sent_A_list.append(inputs[i, prev_idx])
+            len_A_list.append(sent_lens[i, prev_idx])
 
-    if ext_sents_list:
-      sents_batch, lens_batch = [], []
-      for item in ext_sents_list:
-        sents = [s for s, _ in item]
-        sents += [pad_sent] * (max_num_sents - len(sents))
-        sents_batch.append(sents)
+          sent_B_list.append(inputs[i, j])
+          len_B_list.append(sent_lens[i, j])
+          prev_idx = j
 
-        lens = [l for _, l in item]
-        lens += [0] * (max_num_sents - len(lens))
-        lens_batch.append(lens)
-
-      np_sents = np.array(sents_batch, dtype=np.int32)
-      np_sent_lens = np.array(lens_batch, dtype=np.int32)
-      np_states = np.array(states, dtype=np.int32)
+    if sent_A_list:
+      np_sents_A = np.stack(sent_A_list, axis=0)
+      np_sents_B = np.stack(sent_B_list, axis=0)
+      np_lens_A = np.array(len_A_list, dtype=np.int32)
+      np_lens_B = np.array(len_B_list, dtype=np.int32)
     else:  # No valid extractions, return pseudo output
-      np_sents = np.zeros([1, max_num_sents, max_sent_len], dtype=np.int32)
-      np_sent_lens = np.zeros([1, max_num_sents], dtype=np.int32)
-      np_states = np.array(states, dtype=np.int32)
+      np_sents_A = np.zeros([1, max_sent_len], dtype=np.int32)
+      np_sents_B = np.zeros([1, max_sent_len], dtype=np.int32)
+      np_lens_A = np.zeros([1], dtype=np.int32)
+      np_lens_B = np.zeros([1], dtype=np.int32)
 
-    return np_sents, np_sent_lens, np_states
+    return np_sents_A, np_sents_B, np_lens_A, np_lens_B
 
-  def _convert_to_reward(self, extract_probs, states):
+  def _convert_to_reward(self, scores, sampled_extracts):
     """
     Parameters:
       extract_probs: [?] float32
-      states: [batch_size] 0/1
+      sampled_extracts: [batch_size, num_sents_doc] 0 or 1
 
     Returns:
-      rewards: [batch_size] float32
+      rewards: [batch_size, num_sents_doc] float32
+      reward_sum: [batch_size] float32
     """
-    rewards = np.zeros_like(states, dtype=np.float32)  # zero if fail
+    rewards = np.zeros_like(sampled_extracts, dtype=np.float32)  # zero if fail
+    max_reward = self._hps.coh_reward_clip
     idx = 0
-    for i, s in enumerate(states):
-      if s:
-        rewards[i] = extract_probs[idx]
-        idx += 1
+    for i in xrange(sampled_extracts.shape[0]):
+      for j in xrange(sampled_extracts.shape[1]):
+        if sampled_extracts[i, j]:
+          rewards[i, j] = scores[idx]
+          idx += 1
+    reward_sum = np.sum(rewards, axis=1)
 
-    return rewards
+    for i, r in enumerate(reward_sum):
+      if r > max_reward:
+        rewards[i, :] *= max_reward / r
+        reward_sum[i] = max_reward
 
-  def _add_train_op(self):
-    """Sets self._train_op for training."""
-    hps = self._hps
-
-    self._lr_rate = tf.maximum(
-        hps.min_lr,  # minimum learning rate.
-        tf.train.exponential_decay(hps.lr, self.global_step, hps.decay_step,
-                                   hps.decay_rate))
-    tf.summary.scalar("learning_rate", self._lr_rate)
-
-    tvars = tf.trainable_variables()
-    with tf.device(self._device_0):
-      # Compute gradients
-      grads, global_norm = tf.clip_by_global_norm(
-          tf.gradients(self._loss, tvars), hps.max_grad_norm)
-      tf.summary.scalar("global_norm", global_norm)
-
-      # Create optimizer and train ops
-      optimizer = tf.train.GradientDescentOptimizer(self._lr_rate)
-      self._train_op = optimizer.apply_gradients(
-          zip(grads, tvars), global_step=self.global_step, name="train_step")
+    return rewards, reward_sum
 
   def run_train_step(self, sess, batch):
     (enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, extract_targets,
@@ -889,7 +889,3 @@ class CoherentExtractRF(object):
             self._doc_repr: doc_repr,
             self._hist_summary: hist_summary
         })
-
-  def get_global_step(self, sess):
-    """Get the current number of training steps."""
-    return sess.run(self.global_step)
