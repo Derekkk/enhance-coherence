@@ -24,6 +24,7 @@ from base import BaseModel
 from pythonrouge import PythonROUGE
 ROUGE_dir = "/qydata/ywubw/download/RELEASE-1.5.5"
 sentence_sep = "</s>"
+rouge_weights = [0.4, 1.0, 0.5]  # [0.5, 1.0, 0.6]
 
 rouge = PythonROUGE(
     ROUGE_dir,
@@ -44,10 +45,6 @@ rouge = PythonROUGE(
     samples=1000,
     favor=False,
     p=0.5)
-
-rouge_weights = [0.4, 1.0, 0.5]
-
-# rouge_weights = [0.5, 1.0, 0.6]
 
 
 def compute_rouge(item):
@@ -70,7 +67,8 @@ HParams = namedtuple("HParams", "mode, min_lr, lr, dropout, batch_size,"
                      "doc_repr_dim, word_conv_widths, word_conv_filters,"
                      "mlp_num_hiddens, train_mode, coherence_coef,"
                      "rouge_coef, min_num_input_sents, trg_weight_norm,"
-                     "max_grad_norm, decay_step, decay_rate, coh_reward_clip")
+                     "max_grad_norm, decay_step, decay_rate, coh_reward_clip,"
+                     "hist_repr_dim")
 
 
 def CreateHParams():
@@ -103,7 +101,8 @@ def CreateHParams():
       decay_rate=FLAGS.decay_rate,
       coherence_coef=FLAGS.coherence_coef,  # coefficient of coherence loss
       rouge_coef=FLAGS.rouge_coef,  # coefficient of ROUGE loss
-      coh_reward_clip=FLAGS.coh_reward_clip)
+      coh_reward_clip=FLAGS.coh_reward_clip,  # maximum reward clipping
+      hist_repr_dim=FLAGS.hist_repr_dim)  # dimension of history representation
   return hps
 
 
@@ -205,9 +204,15 @@ class CoherentExtractRF(BaseModel):
             tf.reduce_sum(self._sentence_vecs, 0),
             tf.expand_dims(tf.to_float(self._input_doc_lens),
                            1))  # [batch_size, enc_num_hidden*2]
-        self._doc_repr = tf.tanh(
-            lib.linear(
-                doc_mean_vec, hps.doc_repr_dim, True, scope="doc_repr_linear"))
+        # self._doc_repr = tf.tanh(
+        #     lib.linear(
+        #         doc_mean_vec, hps.doc_repr_dim, True, scope="doc_repr_linear"))
+        self._doc_repr = tf.contrib.layers.fully_connected(
+            doc_mean_vec,
+            hps.doc_repr_dim,
+            activation_fn=tf.tanh,
+            weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+            scope="sents_to_doc")
 
         # Absolute position embedding
         abs_pos_idx = tf.range(0, hps.num_sents_doc)  # [num_sents_doc]
@@ -240,7 +245,13 @@ class CoherentExtractRF(BaseModel):
         if hps.mode == "train":  # train mode
           if "sl" in hps.train_mode:
             # Initialize the representation of all history summaries extracted
-            hist_summary = tf.zeros_like(sent_vecs_list[0])
+            if hps.hist_repr_dim:
+              hist_summary = tf.zeros(
+                  [hps.batch_size, hps.hist_repr_dim],
+                  dtype=tf.float32)  # [batch_size, hist_repr_dim]
+            else:
+              hist_summary = tf.zeros_like(sent_vecs_list[0])  # [batch_size, ?]
+
             extract_logit_list, extract_prob_list = [], []
 
             for i in xrange(hps.num_sents_doc):  # loop over the sentences
@@ -259,7 +270,18 @@ class CoherentExtractRF(BaseModel):
               extract_prob_list.append(extract_prob)
 
               target = tf.expand_dims(targets[i], 1)  # [batch_size, 1] float32
-              hist_summary += target * cur_sent_vec  #[batch_size, enc_num_hidden*2]
+
+              if hps.hist_repr_dim:
+                hist_sent_vec = tf.contrib.layers.fully_connected(
+                    cur_sent_vec,
+                    hps.hist_repr_dim,
+                    activation_fn=tf.tanh,
+                    weights_initializer=tf.random_uniform_initializer(
+                        -0.1, 0.1),
+                    scope="sent_to_hist")
+                hist_summary += target * hist_sent_vec  #[batch_size, hist_repr_dim]
+              else:
+                hist_summary += target * cur_sent_vec  #[batch_size, enc_num_hidden*2]
 
             self._extract_logits = tf.stack(
                 extract_logit_list, axis=1)  # [batch_size, num_sents_doc, 2]
@@ -267,7 +289,12 @@ class CoherentExtractRF(BaseModel):
                 extract_prob_list, axis=1)  # [batch_size, num_sents_doc, 2]
 
           if "rouge" in hps.train_mode or "coherence" in hps.train_mode:
-            rl_hist_summary = tf.zeros_like(sent_vecs_list[0])
+            if hps.hist_repr_dim:
+              rl_hist_summary = tf.zeros(
+                  [hps.batch_size, hps.hist_repr_dim],
+                  dtype=tf.float32)  # [batch_size, hist_repr_dim]
+            else:
+              rl_hist_summary = tf.zeros_like(sent_vecs_list[0])
             rl_extract_logit_list, sampled_extract_list = [], []
 
             for i in xrange(hps.num_sents_doc):
@@ -287,9 +314,23 @@ class CoherentExtractRF(BaseModel):
                   logits=rl_extract_logit,
                   num_samples=1)  # [batch_size, 1] int32
               sampled_extract_list.append(sampled_extract)
-              rl_hist_summary += tf.to_float(
-                  sampled_extract
-              ) * cur_sent_vec  # [batch_size, enc_num_hidden*2]
+
+              if hps.hist_repr_dim:
+                hist_sent_vec = tf.contrib.layers.fully_connected(
+                    cur_sent_vec,
+                    hps.hist_repr_dim,
+                    activation_fn=tf.tanh,
+                    weights_initializer=tf.random_uniform_initializer(
+                        -0.1, 0.1),
+                    scope="sent_to_hist")
+                rl_hist_summary += tf.to_float(
+                    sampled_extract
+                ) * hist_sent_vec  #[batch_size, hist_repr_dim]
+
+              else:
+                rl_hist_summary += tf.to_float(
+                    sampled_extract
+                ) * cur_sent_vec  # [batch_size, enc_num_hidden*2]
 
             self._rl_extract_logits = tf.stack(
                 rl_extract_logit_list, axis=1)  # [batch_size, num_sents_doc, 2]
@@ -402,7 +443,16 @@ class CoherentExtractRF(BaseModel):
                             hist_summary):
     hps = self._hps
 
-    hist_sum_norm = tf.tanh(hist_summary)  # normalized with tanh
+    if hps.hist_repr_dim:
+      hist_sum_norm = tf.contrib.layers.fully_connected(
+          hist_summary,
+          hps.hist_repr_dim,
+          activation_fn=tf.tanh,
+          weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+          scope="hist_tanh")
+    else:
+      hist_sum_norm = tf.tanh(hist_summary)  # normalized with tanh
+
     mlp_hidden = tf.concat(
         [sent_vec, abs_pos_emb, rel_pos_emb, doc_repr, hist_sum_norm], axis=1)
 

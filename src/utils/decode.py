@@ -104,12 +104,6 @@ class BeamSearch(object):
     beam_size = self._beam_size
     model = self._model
 
-    # # Repeat the inputs by beam_size times
-    # enc_batch = np.tile(enc_input, (beam_size, 1, 1))
-    # enc_doc_lens = np.tile(enc_doc_len, beam_size)
-    # enc_sent_lens = np.tile(enc_sent_len, (beam_size, 1))
-    # sent_rel_poses = np.tile(sent_rel_pos, (beam_size, 1))
-
     # Run the encoder and extract the outputs and final state.
     sent_vecs, abs_pos_embs, rel_pos_embs, doc_repr = model.decode_get_feats(
         sess, enc_input, enc_doc_len, enc_sent_len, sent_rel_pos)
