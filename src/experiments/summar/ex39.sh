@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 python run.py \
   --model=cohere_extract_rf \
   --data_path=data/cnndaily/training_shuf.pkl \
@@ -35,4 +35,5 @@ python run.py \
   --word_conv_widths '3,5,7' \
   --word_conv_filters '100,200,200' \
   --mlp_num_hiddens '800,300' \
+  --temp_dir '/ssd/data/ywubw/tmp'\
 

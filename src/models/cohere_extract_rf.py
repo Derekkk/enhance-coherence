@@ -52,7 +52,10 @@ def compute_rouge(item):
   reference_sents = item[1]
 
   rouge_dict = rouge.evaluate(
-      [[system_sents]], [[reference_sents]], to_dict=True, f_measure_only=True)
+      [[system_sents]], [[reference_sents]],
+      to_dict=True,
+      f_measure_only=True,
+      temp_dir=FLAGS.temp_dir)
   weighted_rouge = (rouge_dict["ROUGE-1"] * rouge_weights[0] +
                     rouge_dict["ROUGE-2"] * rouge_weights[1] +
                     rouge_dict["ROUGE-L"] * rouge_weights[2]) / 3.0
@@ -256,14 +259,17 @@ class CoherentExtractRF(BaseModel):
 
             for i in xrange(hps.num_sents_doc):  # loop over the sentences
               cur_sent_vec = sent_vecs_list[i]
-              cur_abs_pos = abs_pos_emb_list[i]
-              cur_rel_pos = rel_pos_emb_list[i]
+              cur_sent_feats = [cur_sent_vec]
+              if hps.pos_emb_dim:
+                cur_abs_pos = abs_pos_emb_list[i]
+                cur_rel_pos = rel_pos_emb_list[i]
+                cur_sent_feats += [cur_abs_pos, cur_rel_pos]
 
               if i > 0:  # NB: reusing is important!
                 tf.get_variable_scope().reuse_variables()
 
               extract_logit = self._compute_extract_prob(
-                  cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
+                  cur_sent_feats, self._doc_repr,
                   hist_summary)  # [batch_size, 2]
               extract_logit_list.append(extract_logit)
               extract_prob = tf.nn.softmax(extract_logit)  # [batch_size, 2]
@@ -299,14 +305,17 @@ class CoherentExtractRF(BaseModel):
 
             for i in xrange(hps.num_sents_doc):
               cur_sent_vec = sent_vecs_list[i]
-              cur_abs_pos = abs_pos_emb_list[i]
-              cur_rel_pos = rel_pos_emb_list[i]
+              cur_sent_feats = [cur_sent_vec]
+              if hps.pos_emb_dim:
+                cur_abs_pos = abs_pos_emb_list[i]
+                cur_rel_pos = rel_pos_emb_list[i]
+                cur_sent_feats += [cur_abs_pos, cur_rel_pos]
 
               if i > 0:  # NB: reusing is important!
                 tf.get_variable_scope().reuse_variables()
 
               rl_extract_logit = self._compute_extract_prob(
-                  cur_sent_vec, cur_abs_pos, cur_rel_pos, self._doc_repr,
+                  cur_sent_feats, self._doc_repr,
                   rl_hist_summary)  # [batch_size, 2]
               rl_extract_logit_list.append(rl_extract_logit)
 
@@ -347,10 +356,15 @@ class CoherentExtractRF(BaseModel):
                                              rel_pos_emb_list[0].get_shape())
           self._hist_summary = tf.placeholder(tf.float32,
                                               sent_vecs_list[0].get_shape())
+          if hps.pos_emb_dim:
+            sent_feats = [
+                self._cur_sent_vec, self._cur_abs_pos, self._cur_rel_pos
+            ]
+          else:
+            sent_feats = [self._cur_sent_vec]
 
           extract_logit = self._compute_extract_prob(
-              self._cur_sent_vec, self._cur_abs_pos, self._cur_rel_pos,
-              self._doc_repr, self._hist_summary)  # [batch_size, 2]
+              sent_feats, self._doc_repr, self._hist_summary)  # [batch_size, 2]
           self._ext_log_prob = tf.log(
               tf.nn.softmax(extract_logit))  # [batch_size, 2]
 
@@ -439,8 +453,13 @@ class CoherentExtractRF(BaseModel):
 
     return sent_rnn_output
 
-  def _compute_extract_prob(self, sent_vec, abs_pos_emb, rel_pos_emb, doc_repr,
-                            hist_summary):
+  def _compute_extract_prob(self, sent_feats, doc_repr, hist_summary):
+    """
+    Parameters:
+      sent_feats: a list of features, each element has shape [batch_size, ?]
+      doc_repr: [batch_size, doc_repr_dim]
+      hist_summary: [batch_size, hist_repr_dim]
+    """
     hps = self._hps
 
     if hps.hist_repr_dim:
@@ -453,8 +472,7 @@ class CoherentExtractRF(BaseModel):
     else:
       hist_sum_norm = tf.tanh(hist_summary)  # normalized with tanh
 
-    mlp_hidden = tf.concat(
-        [sent_vec, abs_pos_emb, rel_pos_emb, doc_repr, hist_sum_norm], axis=1)
+    mlp_hidden = tf.concat(sent_feats + [doc_repr, hist_sum_norm], axis=1)
 
     # Construct an MLP for extraction decisions
     for i, n in enumerate(hps.mlp_num_hiddens):

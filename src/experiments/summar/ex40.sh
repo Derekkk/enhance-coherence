@@ -1,0 +1,39 @@
+export CUDA_VISIBLE_DEVICES=6
+python run.py \
+  --model=cohere_extract_rf \
+  --data_path=data/cnndaily/training_shuf.pkl \
+  --input_vocab=data/cnndaily/training.vocab \
+  --input_vsize 150000 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex40 \
+  --summary_dir=log/cnndaily/summar/ex40 \
+  --mode=train \
+  --train_mode='rouge' \
+  --lr 0.15 \
+  --min_lr 0.01 \
+  --max_grad_norm 0.12 \
+  --decay_step 30000 \
+  --decay_rate 0.9 \
+  --dropout 0.0 \
+  --batch_size 32 \
+  --max_run_steps 200000 \
+  --display_freq 100 \
+  --valid_path=data/cnndaily/validation_shuf.pkl \
+  --valid_freq 1000 \
+  --checkpoint_secs 1200 \
+  --use_bucketing False \
+  --truncate_input True \
+  --min_num_input_sents 3 \
+  --emb_dim 100 \
+  --num_sents_doc 80 \
+  --num_words_sent 50 \
+  --rel_pos_max_idx 11 \
+  --enc_num_hidden 300 \
+  --enc_layers 1 \
+  --pos_emb_dim 100 \
+  --doc_repr_dim 800 \
+  --hist_repr_dim 800 \
+  --word_conv_widths '3,5,7' \
+  --word_conv_filters '100,200,200' \
+  --mlp_num_hiddens '1000,500,200' \
+  --temp_dir '/ssd/data/ywubw/tmp'\
+

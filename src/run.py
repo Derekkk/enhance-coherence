@@ -102,6 +102,8 @@ tf.app.flags.DEFINE_string("pretrain_dir", "",
 # ----------- cohere_extract_rf related flags ----------------
 tf.app.flags.DEFINE_float("rouge_coef", 1.0,
                           "Coefficient of ROUGE loss in REINFORCE.")
+tf.app.flags.DEFINE_string("temp_dir", "/ssd/data/ywubw/tmp",
+                           "Temporary directory for ROUGE script.")
 tf.app.flags.DEFINE_float("coh_reward_clip", 3.0,
                           "Maximum coherence reward for reward clipping.")
 tf.app.flags.DEFINE_integer("hist_repr_dim", 0,
