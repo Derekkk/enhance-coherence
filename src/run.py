@@ -276,8 +276,7 @@ def main():
           hps._replace(batch_size=None),  # to allow variable batch_size
           input_vocab,
           num_gpus=FLAGS.num_gpus)
-      decoder = SummaRuNNerRFDecoder(
-          model, beam_size=hps.batch_size)  # use batch_size as beam_size
+      decoder = SummaRuNNerRFDecoder(model, hps)  # use batch_size as beam_size
       output_fn = decoder.decode(batcher)
       evaluate.eval_rouge(output_fn)
     else:

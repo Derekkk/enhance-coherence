@@ -354,8 +354,7 @@ class CoherentExtractRF(BaseModel):
                                              abs_pos_emb_list[0].get_shape())
           self._cur_rel_pos = tf.placeholder(tf.float32,
                                              rel_pos_emb_list[0].get_shape())
-          self._hist_summary = tf.placeholder(tf.float32,
-                                              sent_vecs_list[0].get_shape())
+
           if hps.pos_emb_dim:
             sent_feats = [
                 self._cur_sent_vec, self._cur_abs_pos, self._cur_rel_pos
@@ -363,8 +362,27 @@ class CoherentExtractRF(BaseModel):
           else:
             sent_feats = [self._cur_sent_vec]
 
+          if hps.hist_repr_dim:
+            self._hist_summary = tf.placeholder(
+                tf.float32, [hps.batch_size, hps.hist_repr_dim])
+          else:
+            self._hist_summary = tf.placeholder(tf.float32,
+                                                sent_vecs_list[0].get_shape())
+
           extract_logit = self._compute_extract_prob(
               sent_feats, self._doc_repr, self._hist_summary)  # [batch_size, 2]
+
+          if hps.hist_repr_dim:
+            hist_sent_vec = tf.contrib.layers.fully_connected(
+                self._cur_sent_vec,
+                hps.hist_repr_dim,
+                activation_fn=tf.tanh,
+                weights_initializer=tf.random_uniform_initializer(-0.1, 0.1),
+                scope="sent_to_hist")
+            self._sent_vec_out = hist_sent_vec  #[batch_size, hist_repr_dim]
+          else:
+            self._sent_vec_out = self._cur_sent_vec  #[batch_size, enc_num_hidden*2]
+
           self._ext_log_prob = tf.log(
               tf.nn.softmax(extract_logit))  # [batch_size, 2]
 
@@ -704,6 +722,9 @@ class CoherentExtractRF(BaseModel):
       if r > max_reward:
         rewards[i, :] *= max_reward / r
         reward_sum[i] = max_reward
+      elif r < -max_reward:
+        rewards[i, :] *= -max_reward / r
+        reward_sum[i] = -max_reward
 
     return rewards, reward_sum
 
@@ -939,6 +960,7 @@ class CoherentExtractRF(BaseModel):
             self._input_doc_lens: enc_doc_lens,
             self._input_rel_pos: sent_rel_pos
         })
+
     return results
 
   def decode_log_probs(self, sess, sent_vec, abs_pos_embed, rel_pos_embed,
@@ -947,9 +969,8 @@ class CoherentExtractRF(BaseModel):
     if not self._hps.mode == "decode":
       raise ValueError("This method is only for decode mode.")
 
-    # sent_vec, abs_pos_embed, rel_pos_embed, doc_repr, hist_summary = features
     return sess.run(
-        self._ext_log_prob,
+        [self._ext_log_prob, self._sent_vec_out],
         feed_dict={
             self._cur_sent_vec: sent_vec,
             self._cur_abs_pos: abs_pos_embed,

@@ -78,15 +78,17 @@ class Hypothesis(object):
 class BeamSearch(object):
   """Beam search."""
 
-  def __init__(self, model, beam_size):
+  def __init__(self, model, hps):
     """Creates BeamSearch object.
 
     Args:
-      model: SummaRuNNerRF model.
-      beam_size: int.
+      model: CoherentExtractRF model.
+      hps: hyper-parameters.
     """
     self._model = model
-    self._beam_size = beam_size
+    self._hps = hps
+    self._beam_size = hps.batch_size
+    self._hist_dim = hps.hist_repr_dim
 
   def beam_search(self, sess, enc_input, enc_doc_len, enc_sent_len,
                   sent_rel_pos):
@@ -113,8 +115,14 @@ class BeamSearch(object):
     # NB: doc_repr.shape=[1, enc_num_hidden*2]
 
     # Replicate the initialized hypothesis for the first step.
-    hyps = [Hypothesis(
-        [], 0.0, np.zeros_like(sent_vecs[0, :, :]))]  # [1, enc_num_hidden*2]
+    if self._hist_dim:
+      hyps = [
+          Hypothesis([], 0.0, np.zeros([1, self._hist_dim], dtype=np.float32))
+      ]  # [1, state_size]
+    else:
+      hyps = [Hypothesis(
+          [], 0.0, np.zeros_like(sent_vecs[0, :, :]))]  # [1, enc_num_hidden*2]
+
     results = []
     max_steps = enc_doc_len[0]
 
@@ -127,15 +135,15 @@ class BeamSearch(object):
       cur_doc_repr = np.tile(doc_repr, (hyps_len, 1))
       cur_hist_sum = np.concatenate([h.hist_summary for h in hyps], axis=0)
 
-      ext_log_probs = model.decode_log_probs(sess, cur_sent_vec, cur_abs_pos,
-                                             cur_rel_pos, cur_doc_repr,
-                                             cur_hist_sum)
+      ext_log_probs, sent_vec_out = model.decode_log_probs(
+          sess, cur_sent_vec, cur_abs_pos, cur_rel_pos, cur_doc_repr,
+          cur_hist_sum)
 
       # Extend each hypothesis.
       all_hyps = []
       for j, h in enumerate(hyps):
-        all_hyps.append(h.extend(0, ext_log_probs[j, 0], sent_vec_i))
-        all_hyps.append(h.extend(1, ext_log_probs[j, 1], sent_vec_i))
+        all_hyps.append(h.extend(0, ext_log_probs[j, 0], sent_vec_out[j, :]))
+        all_hyps.append(h.extend(1, ext_log_probs[j, 1], sent_vec_out[j, :]))
 
       hyps = self._best_hyps(all_hyps)[:beam_size]
 
@@ -155,16 +163,16 @@ class BeamSearch(object):
 class SummaRuNNerRFDecoder(object):
   """Beam search decoder for SummaRuNNerRF."""
 
-  def __init__(self, model, beam_size):
+  def __init__(self, model, hps):
     """Beam search decoding.
 
     Args:
       model: the model object.
-      beam_size: int.
+      hps: hyper-parameters.
     """
     self._model = model
     self._model.build_graph()
-    self._beam_size = beam_size
+    self._hps = hps
 
   def decode(self, batch_reader):
     """Decoding loop for long running process."""
@@ -184,7 +192,7 @@ class SummaRuNNerRFDecoder(object):
     saver.restore(sess, ckpt_path)
 
     result_list = []
-    bs = BeamSearch(self._model, self._beam_size)
+    bs = BeamSearch(self._model, self._hps)
 
     for next_batch in batch_reader:
       enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, others = next_batch

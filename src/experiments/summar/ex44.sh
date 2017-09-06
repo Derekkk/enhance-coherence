@@ -1,20 +1,20 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=6
 python run.py \
   --model=cohere_extract_rf \
   --data_path=data/cnndaily/training_shuf.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/cnndaily/summar/ex40 \
-  --summary_dir=log/cnndaily/summar/ex40 \
+  --ckpt_root=checkpoints/cnndaily/summar/ex44 \
+  --summary_dir=log/cnndaily/summar/ex44 \
   --mode=train \
   --train_mode='rouge' \
-  --lr 0.15 \
+  --lr 0.2 \
   --min_lr 0.01 \
-  --max_grad_norm 0.12 \
+  --max_grad_norm 0.2 \
   --decay_step 30000 \
   --decay_rate 0.9 \
-  --dropout 0.0 \
-  --batch_size 32 \
+  --dropout 0.1 \
+  --batch_size 64 \
   --max_run_steps 200000 \
   --display_freq 100 \
   --valid_path=data/cnndaily/validation_shuf.pkl \
@@ -23,17 +23,17 @@ python run.py \
   --use_bucketing False \
   --truncate_input True \
   --min_num_input_sents 3 \
-  --emb_dim 100 \
+  --emb_dim 128 \
   --num_sents_doc 80 \
   --num_words_sent 50 \
   --rel_pos_max_idx 11 \
-  --enc_num_hidden 300 \
+  --enc_num_hidden 256 \
   --enc_layers 1 \
-  --pos_emb_dim 100 \
-  --doc_repr_dim 800 \
-  --hist_repr_dim 800 \
+  --pos_emb_dim 0 \
+  --doc_repr_dim 512 \
+  --hist_repr_dim 512 \
   --word_conv_widths '3,5,7' \
-  --word_conv_filters '100,200,200' \
-  --mlp_num_hiddens '1000,500,200' \
+  --word_conv_filters '128,256,256' \
+  --mlp_num_hiddens '512,256' \
   --temp_dir '/ssd/data/ywubw/tmp'\
 
