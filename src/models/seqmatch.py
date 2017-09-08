@@ -89,7 +89,36 @@ class SeqMatchNet(BaseModel):
 
     self._summaries = tf.summary.merge_all()
 
-  def inference_graph(self, sents_A, sents_B, lengths_A, lengths_B, device):
+  def build_inference_graph(self, device=None):
+    self.global_step = tf.Variable(0, name="global_step", trainable=False)
+
+    hps = self._hps
+    if device is None:
+      device = self._device_0
+
+    self._sents_A = tf.placeholder(tf.int32, [None, hps.max_sent_len])
+    self._sents_B = tf.placeholder(tf.int32, [None, hps.max_sent_len])
+    self._lengths_A = tf.placeholder(tf.int32, [None])
+    self._lengths_B = tf.placeholder(tf.int32, [None])
+
+    with tf.variable_scope("seq_match"), tf.device(device):
+      with tf.variable_scope('embeddings'):
+        self._add_embeddings()
+
+        sent_A_embed = tf.nn.embedding_lookup(
+            self._embed, self._sents_A)  #[?,max_sent_len,sm_emb_dim]
+        sent_B_embed = tf.nn.embedding_lookup(
+            self._embed, self._sents_B)  #[?,max_sent_len,sm_emb_dim]
+
+      if hps.seqmatch_type == "smn":
+        raise NotImplementedError()
+      elif hps.seqmatch_type == "conv_match":
+        self._output = self._add_conv_match(sent_A_embed, sent_B_embed,
+                                            self._lengths_A, self._lengths_B)
+      else:
+        raise ValueError("Invalid seqmatch_type %s" % hps.seqmatch_type)
+
+  def get_inference_graph(self, sents_A, sents_B, lengths_A, lengths_B, device):
     hps = self._hps
 
     sents_A.set_shape([None, hps.max_sent_len])
@@ -482,3 +511,15 @@ class SeqMatchNet(BaseModel):
         tf.logging.info("\tValid step %d: avg_loss %f avg_acc %f" %
                         (step, avg_valid_loss, avg_valid_acc))
         summary_writer.flush()
+
+  def compute_coherence(self, sess, sents_A, sents_B, lengths_A, lengths_B):
+    result = sess.run(
+        self._output,
+        feed_dict={
+            self._sents_A: sents_A,
+            self._sents_B: sents_B,
+            self._lengths_A: lengths_A,
+            self._lengths_B: lengths_B
+        })
+
+    return result

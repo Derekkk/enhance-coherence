@@ -19,12 +19,13 @@ import sys
 import time
 import numpy as np
 import tensorflow as tf
-# import pdb
+import pdb
 
 FLAGS = tf.app.flags.FLAGS
 
 DECODE_IO_FLUSH_INTERVAL = 30
 sentence_sep = "</s>"
+url_tag = "<url>"
 sys_tag = "<system>"
 ref_tag = "<reference>"
 
@@ -87,7 +88,7 @@ class BeamSearch(object):
     """
     self._model = model
     self._hps = hps
-    self._beam_size = hps.batch_size
+    self.beam_size = hps.batch_size
     self._hist_dim = hps.hist_repr_dim
 
   def beam_search(self, sess, enc_input, enc_doc_len, enc_sent_len,
@@ -103,7 +104,7 @@ class BeamSearch(object):
       hyps: list of Hypothesis, the best hypotheses found by beam search,
           ordered by score
     """
-    beam_size = self._beam_size
+    beam_size = self.beam_size
     model = self._model
 
     # Run the encoder and extract the outputs and final state.
@@ -194,6 +195,8 @@ class SummaRuNNerRFDecoder(object):
     result_list = []
     bs = BeamSearch(self._model, self._hps)
 
+    pdb.set_trace()
+
     for next_batch in batch_reader:
       enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, others = next_batch
 
@@ -210,9 +213,11 @@ class SummaRuNNerRFDecoder(object):
         decoded_sents = [doc_sents[x] for x in best_beam.extract_ids]
         decoded_str = sentence_sep.join(decoded_sents)
         summary_str = others[1][i]
+        url_str = others[2][i]
 
-        result_list.append(" ".join(
-            [sys_tag, decoded_str, ref_tag, summary_str]) + "\n")
+        result_list.append(" ".join([
+            url_tag, url_str, sys_tag, decoded_str, ref_tag, summary_str
+        ]) + "\n")
 
     # Name output files by number of train steps and time
     decode_dir = FLAGS.decode_dir
@@ -220,12 +225,14 @@ class SummaRuNNerRFDecoder(object):
       os.makedirs(decode_dir)
     step = self._model.get_global_step(sess)
     timestep = int(time.time())
-    output_fn = os.path.join(decode_dir, 'iter_%d_%d' % (step, timestep))
+    output_fn = os.path.join(decode_dir,
+                             'iter_%d_bs%d_%d' % (step, bs.beam_size, timestep))
 
     with open(output_fn, 'w') as f:
       f.writelines(result_list)
     tf.logging.info('Outputs written to %s', output_fn)
 
+    sess.close()
     return output_fn
 
 
@@ -305,3 +312,76 @@ class TopKDecoder(object):
     decoded_output = sentence_sep.join([doc_sents[i] for i in topk_ids])
 
     return decoded_output
+
+
+class SeqMatchEvalDecoder(object):
+  """Beam search decoder for SummaRuNNerRF."""
+
+  def __init__(self, model, hps):
+    """Beam search decoding.
+
+    Args:
+      model: the model object.
+      hps: hyper-parameters.
+    """
+    self._model = model
+    self._model.build_inference_graph()
+    self._hps = hps
+
+  def decode(self, batch_reader):
+    """Decoding loop for long running process."""
+    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+    saver = tf.train.Saver()
+    model = self._model
+
+    # Restore the saved checkpoint model
+    ckpt_state = tf.train.get_checkpoint_state(FLAGS.ckpt_root)
+    if not (ckpt_state and ckpt_state.model_checkpoint_path):
+      tf.logging.info('No model to decode at %s', FLAGS.ckpt_root)
+      return False
+
+    tf.logging.info('Checkpoint path %s', ckpt_state.model_checkpoint_path)
+    ckpt_path = os.path.join(FLAGS.ckpt_root,
+                             os.path.basename(ckpt_state.model_checkpoint_path))
+    tf.logging.info('Renamed checkpoint path %s', ckpt_path)
+    saver.restore(sess, ckpt_path)
+
+    result_list = []
+
+    for next_batch in batch_reader:
+      sent_A, sent_B_pos, sent_B_negs, len_A, len_B_pos, len_B_negs, others = next_batch
+      sent_B_pos = np.expand_dims(sent_B_pos, axis=0)  # [1, max_sent_len]
+      sents_B = np.concatenate(
+          [sent_B_pos, sent_B_negs], axis=0)  # [k+1, max_sent_len]
+      sents_A = np.tile(np.expand_dims(sent_A, 0), (sents_B.shape[0], 1))
+
+      lengths_A = np.tile(len_A, sents_B.shape[0])
+      lengths_B = np.array([len_B_pos] + len_B_negs, dtype=np.int32)
+
+      scores = model.compute_coherence(sess, sents_A, sents_B, lengths_A,
+                                       lengths_B)
+
+      sent_A_str, sent_B_pos_str, sent_B_neg_strs = others
+
+      output_str = "<A> %s\n<B+> %s <prob>%f\n" % (sent_A_str, sent_B_pos_str,
+                                                   scores[0])
+      for i, s in enumerate(sent_B_neg_strs):
+        output_str += "<B-> %s <prob>%f\n" % (s, scores[i + 1])
+      output_str += "\n"
+
+      result_list.append(output_str)
+
+    # Name output files by number of train steps and time
+    decode_dir = FLAGS.decode_dir
+    if not os.path.exists(decode_dir):
+      os.makedirs(decode_dir)
+    step = model.get_global_step(sess)
+    timestep = int(time.time())
+    output_fn = os.path.join(decode_dir, 'iter_%d_%d' % (step, timestep))
+
+    with open(output_fn, 'w') as f:
+      f.writelines(result_list)
+    tf.logging.info('Outputs written to %s', output_fn)
+
+    sess.close()
+    return output_fn

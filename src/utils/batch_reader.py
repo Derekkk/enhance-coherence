@@ -25,21 +25,27 @@ import glob
 import cPickle as pkl
 from collections import namedtuple
 # import pdb
+FLAGS = tf.app.flags.FLAGS
 
 ExtractiveSample = namedtuple('ExtractiveSample',
                               'enc_input, enc_doc_len, enc_sent_len,'
                               'sent_rel_pos, extract_target, target_weight,'
-                              'origin_input origin_output')
+                              'origin_input origin_output url')
 ExtractiveBatch = namedtuple('ExtractiveBatch',
                              'enc_batch, enc_doc_lens, enc_sent_lens,'
                              'sent_rel_pos, extract_targets, target_weights,'
-                             'others')  # others=(origin_inputs,origin_outputs)
+                             'others')
+# others=(origin_inputs,origin_outputs,url)
 
 SentencePair = namedtuple('SentencePair',
                           'sent_A, sent_B, length_A, length_B, label')
 SentencePairBatch = namedtuple('SentencePairBatch',
                                'sents_A, sents_B, lengths_A, lengths_B,'
                                'labels')
+
+SeqMatchEvalTriplet = namedtuple('SeqMatchEvalTriplet', 'sent_A, sent_B_pos,'
+                                 'sent_B_negs, length_A, length_B_pos,'
+                                 'length_B_negs, others')
 
 SentenceTriplet = namedtuple('SentenceTriplet',
                              'sent_A, sent_B_pos, sent_B_neg,'
@@ -110,6 +116,20 @@ def sample_triplets(sequence, seq_len=1000, window_size=None):
         triplets.append((i, i + 1, i))
 
   return triplets
+
+
+def gen_1_in_k(document, all_set, k, size):
+  AB_pairs = []
+  for i in xrange(len(document) - 2):
+    AB_pairs.append([document[i], document[i + 1], document[i + 2:i + 2 + k]])
+
+  AB_pairs = random.sample(AB_pairs, min(len(AB_pairs), size))
+  # for p in AB_pairs:
+  #   negs = random.sample(all_set, min(len(all_set), k))
+  #   negs = [n for n in negs if n != p[1]]
+  #   p.append(negs)
+
+  return AB_pairs
 
 
 class ExtractiveBatcher(object):
@@ -276,7 +296,7 @@ class ExtractiveBatcher(object):
 
       element = ExtractiveSample(np_enc_input, enc_doc_len, np_enc_sent_len,
                                  np_rel_pos, np_target, np_weights, doc_str,
-                                 summary_str)
+                                 summary_str, data_sample.url)
       self._sample_queue.put(element)
 
   def _DataGenerator(self, path, num_epochs=None):
@@ -325,22 +345,24 @@ class ExtractiveBatcher(object):
     """
     hps = self._hps
     field_lists = [[], [], [], [], [], []]
-    origin_inputs, origin_outputs = [], []
+    origin_inputs, origin_outputs, urls = [], [], []
 
     for ex in batch:
       for i in range(6):
         field_lists[i].append(ex[i])
       origin_inputs.append(ex.origin_input)
       origin_outputs.append(ex.origin_output)
+      urls.append(ex.url)
 
     stacked_fields = [np.stack(field, axis=0) for field in field_lists]
     np_origin_inputs = np.array(origin_inputs, dtype=np.str)
     np_origin_outputs = np.array(origin_outputs, dtype=np.str)
+    np_urls = np.array(urls, dtype=np.str)
 
     return ExtractiveBatch(stacked_fields[0], stacked_fields[1],
                            stacked_fields[2], stacked_fields[3],
                            stacked_fields[4], stacked_fields[5],\
-                           (np_origin_inputs, np_origin_outputs))
+                           (np_origin_inputs, np_origin_outputs, np_urls))
 
   def _WatchThreads(self):
     """Watch the daemon input threads and restart if dead."""
@@ -484,6 +506,75 @@ class SentencePairBatcher(ExtractiveBatcher):
     return SentencePairBatch(stacked_fields[0], stacked_fields[1],
                              stacked_fields[2], stacked_fields[3],
                              stacked_fields[4])
+
+
+class SeqMatchEvalBatcher(SentencePairBatcher):
+  """Batch reader for sequence matching model."""
+
+  def _FillInputQueue(self, data_path):
+    """Fill input queue with ExtractiveSample."""
+    hps = self._hps
+    enc_vocab = self._enc_vocab
+    enc_pad_id = enc_vocab.pad_id
+    enc_start_id = enc_vocab.start_id
+    start_sent = [enc_start_id] * hps.max_sent_len
+
+    data_generator = self._DataGenerator(data_path, self._num_epochs)
+    # all_sentences = []
+
+    # pdb.set_trace()
+    for data_sample in data_generator:  # type(data_sample): DocSummary
+      document = data_sample.document
+      # all_sentences += document
+
+      k_cands_triplets = gen_1_in_k(
+          document, document, k=FLAGS.sm_eval_1_in_k, size=2)
+
+      # Convert format and add to queue
+      for sent_A, sent_B_pos, sent_B_negs in k_cands_triplets:
+        sent_A_wids = enc_vocab.GetIds(sent_A)
+        sent_B_pos_wids = enc_vocab.GetIds(sent_B_pos)
+        sent_B_negs_wids = [enc_vocab.GetIds(s) for s in sent_B_negs]
+
+        length_A = len(sent_A_wids)
+        length_B_pos = len(sent_B_pos_wids)
+        length_B_negs = [len(s) for s in sent_B_negs_wids]
+
+        if length_A >= hps.max_sent_len:
+          sent_A_wids = sent_A_wids[:hps.max_sent_len]
+        else:
+          sent_A_wids += [enc_pad_id] * (hps.max_sent_len - length_A)
+
+        if length_B_pos >= hps.max_sent_len:
+          sent_B_pos_wids = sent_B_pos_wids[:hps.max_sent_len]
+        else:
+          sent_B_pos_wids += [enc_pad_id] * (hps.max_sent_len - length_B_pos)
+
+        pad_sent_B_negs_wids = []
+        for s, l in zip(sent_B_negs_wids, length_B_negs):
+          if l >= hps.max_sent_len:
+            pad_sent_B_negs_wids.append(s[:hps.max_sent_len])
+          else:
+            pad_sent_B_negs_wids.append(s + [enc_pad_id] *
+                                        (hps.max_sent_len - l))
+
+        np_sent_A = np.array(sent_A_wids, dtype=np.int32)
+        np_sent_B_pos = np.array(sent_B_pos_wids, dtype=np.int32)
+        np_sent_B_negs = np.array(pad_sent_B_negs_wids, dtype=np.int32)
+
+        element = SeqMatchEvalTriplet(np_sent_A, np_sent_B_pos, np_sent_B_negs,
+                                      length_A, length_B_pos, length_B_negs, \
+                                      (sent_A, sent_B_pos, sent_B_negs))
+        self._sample_queue.put(element)
+
+  def _FillBucketInputQueue(self):
+    """Fill bucketed batches into the bucket_input_queue."""
+    while True:
+      b = self._sample_queue.get()
+      self._batch_queue.put(b)
+
+  def _PackBatch(self, batch):
+    pass
 
 
 class SentenceTripletBatcher(SentencePairBatcher):

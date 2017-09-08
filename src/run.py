@@ -115,7 +115,7 @@ tf.app.flags.DEFINE_integer("max_sent_len", 50, "Maximum length of sentences.")
 tf.app.flags.DEFINE_integer("sm_emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("sm_gru_num_units", 256,
                             "Number of hidden units in encoder RNN.")
-tf.app.flags.DEFINE_float("sm_margin", 0.5, "Margin for ranking loss")
+tf.app.flags.DEFINE_float("sm_margin", 1.0, "Margin for ranking loss")
 tf.app.flags.DEFINE_integer("sm_conv1d_filter", 128,
                             "Number of filters for conv1d.")
 tf.app.flags.DEFINE_integer("sm_conv1d_width", 3, "Width of conv1d.")
@@ -128,6 +128,8 @@ tf.app.flags.DEFINE_string("sm_conv_widths", "3",
 tf.app.flags.DEFINE_string("sm_maxpool_widths", "2", "Width of max-pooling.")
 tf.app.flags.DEFINE_string("sm_fc_num_units", "256",
                            "Number of units in FC layers.")
+tf.app.flags.DEFINE_integer("sm_eval_1_in_k", 9,
+                            "Evaluate 1 positive in k negative.")
 # ----------- coherence related flags ----------------
 tf.app.flags.DEFINE_integer("coh_emb_dim", 128, "Dim of word embedding.")
 tf.app.flags.DEFINE_integer("max_num_sents", 6, "Maximum number of sentences.")
@@ -217,18 +219,27 @@ def main():
           shuffle_batches=shuffle_batches)
 
   elif model_type == "seqmatch":
-    batcher = batch_reader.SentenceTripletBatcher(
-        FLAGS.data_path,
-        input_vocab,
-        batcher_hps,
-        bucketing=FLAGS.use_bucketing,
-        truncate_input=FLAGS.truncate_input,
-        num_epochs=num_epochs,
-        shuffle_batches=shuffle_batches)
     if FLAGS.mode == "train":
+      batcher = batch_reader.SentenceTripletBatcher(
+          FLAGS.data_path,
+          input_vocab,
+          batcher_hps,
+          bucketing=FLAGS.use_bucketing,
+          truncate_input=FLAGS.truncate_input,
+          num_epochs=num_epochs,
+          shuffle_batches=shuffle_batches)
       # Create validation data reader
       valid_batcher = batch_reader.SentenceTripletBatcher(
           FLAGS.valid_path,
+          input_vocab,
+          batcher_hps,
+          bucketing=FLAGS.use_bucketing,
+          truncate_input=FLAGS.truncate_input,
+          num_epochs=num_epochs,
+          shuffle_batches=shuffle_batches)
+    else:
+      batcher = batch_reader.SeqMatchEvalBatcher(
+          FLAGS.data_path,
           input_vocab,
           batcher_hps,
           bucketing=FLAGS.use_bucketing,
@@ -279,6 +290,15 @@ def main():
       decoder = SummaRuNNerRFDecoder(model, hps)  # use batch_size as beam_size
       output_fn = decoder.decode(batcher)
       evaluate.eval_rouge(output_fn)
+    elif model_type == "seqmatch":
+      from utils.decode import SeqMatchEvalDecoder
+      model = Model(
+          hps._replace(batch_size=None),  # to allow variable batch_size
+          input_vocab,
+          num_gpus=FLAGS.num_gpus)
+      decoder = SeqMatchEvalDecoder(model, hps)  # use batch_size as beam_size
+      output_fn = decoder.decode(batcher)
+      # evaluate.eval_rouge(output_fn)
     else:
       raise NotImplementedError()
   else:

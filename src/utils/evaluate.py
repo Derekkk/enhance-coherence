@@ -37,14 +37,15 @@ def eval_rouge(in_path):
       p=0.5)
 
   # pdb.set_trace()
-  sys_start = len(sys_tag)
   num_samples = 0
   summary, reference = [], []
 
   with open(in_path, "r") as in_file:
     for l in in_file.readlines():
+      sys_start = l.find(sys_tag) + len(sys_tag)
       sys_end = l.find(ref_tag)
       sys_str = l[sys_start:sys_end].strip()
+
       ref_start = sys_end + len(ref_tag)
       ref_str = l[ref_start:].strip()
 

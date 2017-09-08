@@ -1,10 +1,10 @@
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=0
 python run.py \
   --model=cohere_extract_rf \
   --data_path=data/cnndaily/test.pkl \
   --input_vocab=data/cnndaily/training.vocab \
   --input_vsize 150000 \
-  --ckpt_root=checkpoints/archive/cnndaily/summar/ex44 \
+  --ckpt_root=checkpoints/archive/cnndaily/summar/ex46 \
   --mode=decode \
   --batch_size 10 \
   --use_bucketing False \
@@ -21,5 +21,5 @@ python run.py \
   --word_conv_widths '3,5,7' \
   --word_conv_filters '128,256,256' \
   --mlp_num_hiddens '512,256' \
-  --decode_dir=out/cnndaily/summar/ex44 \
+  --decode_dir=out/cnndaily/summar/ex46 \
 

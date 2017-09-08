@@ -625,24 +625,26 @@ class CoherentExtractRF(BaseModel):
         "num_words_sent must equal to max_sent_len"
 
     # Step 1: convert the format
-    sents_A, sents_B, lengths_A, lengths_B = tf.py_func(
+    sents_A, sents_B, lengths_A, lengths_B, states = tf.py_func(
         self._convert_to_seqmatch, [
             self._sampled_extracts, self._inputs, self._input_doc_lens,
             self._input_sent_lens
         ],
-        Tout=[tf.int32, tf.int32, tf.int32, tf.int32],
+        Tout=[tf.int32, tf.int32, tf.int32, tf.int32, tf.int32],
         stateful=False,
         name="convert_format")
+
+    states.set_shape([hps.batch_size, hps.num_sents_doc])
 
     # Step 2: add the coherence model to computation graph
     seqmatch_model = seqmatch.SeqMatchNet(
         self._sm_hps, self._input_vocab, num_gpus=1)
-    sm_output, self._coh_vs = seqmatch_model.inference_graph(
+    sm_output, self._coh_vs = seqmatch_model.get_inference_graph(
         sents_A, sents_B, lengths_A, lengths_B, device=self._device_1)
 
     # Step 3: convert the coherence score to rewards
     rewards, reward_sum = tf.py_func(
-        self._convert_to_reward, [sm_output, self._sampled_extracts],
+        self._convert_to_reward, [sm_output, states],
         Tout=[tf.float32, tf.float32],
         stateful=False,
         name="convert_to_reward")  # [batch_size]
@@ -662,6 +664,7 @@ class CoherentExtractRF(BaseModel):
       np_sents_B: [?, max_sent_len]
       np_lens_A: [?]
       np_lens_B: [?]
+      states: [batch_size, num_sents_doc] 0 or 1
     """
     hps = self._sm_hps
     max_sent_len = hps.max_sent_len
@@ -670,7 +673,13 @@ class CoherentExtractRF(BaseModel):
         [self._input_vocab.start_id] * max_sent_len, dtype=np.int32)
 
     sent_A_list, sent_B_list, len_A_list, len_B_list = [], [], [], []
+    states = np.zeros_like(sampled_extracts, dtype=np.int32)
+
     for i in xrange(sampled_extracts.shape[0]):
+      count = np.sum(sampled_extracts[i, :])
+      if count > 6 or count == 0:  # skip those too long/short extractions
+        continue
+
       prev_idx = -1
       for j in xrange(sampled_extracts.shape[1]):
         if sampled_extracts[i, j]:
@@ -684,6 +693,7 @@ class CoherentExtractRF(BaseModel):
           sent_B_list.append(inputs[i, j])
           len_B_list.append(sent_lens[i, j])
           prev_idx = j
+          states[i, j] = 1
 
     if sent_A_list:
       np_sents_A = np.stack(sent_A_list, axis=0)
@@ -696,24 +706,24 @@ class CoherentExtractRF(BaseModel):
       np_lens_A = np.zeros([1], dtype=np.int32)
       np_lens_B = np.zeros([1], dtype=np.int32)
 
-    return np_sents_A, np_sents_B, np_lens_A, np_lens_B
+    return np_sents_A, np_sents_B, np_lens_A, np_lens_B, states
 
-  def _convert_to_reward(self, scores, sampled_extracts):
+  def _convert_to_reward(self, scores, states):
     """
     Parameters:
       extract_probs: [?] float32
-      sampled_extracts: [batch_size, num_sents_doc] 0 or 1
+      states: [batch_size, num_sents_doc] 0 or 1
 
     Returns:
       rewards: [batch_size, num_sents_doc] float32
       reward_sum: [batch_size] float32
     """
-    rewards = np.zeros_like(sampled_extracts, dtype=np.float32)  # zero if fail
+    rewards = np.zeros_like(states, dtype=np.float32)  # zero if fail
     max_reward = self._hps.coh_reward_clip
     idx = 0
-    for i in xrange(sampled_extracts.shape[0]):
-      for j in xrange(sampled_extracts.shape[1]):
-        if sampled_extracts[i, j]:
+    for i in xrange(states.shape[0]):
+      for j in xrange(states.shape[1]):
+        if states[i, j]:
           rewards[i, j] = scores[idx]
           idx += 1
     reward_sum = np.sum(rewards, axis=1)
@@ -751,7 +761,7 @@ class CoherentExtractRF(BaseModel):
           self._train_op, self._summaries, self._loss, self._avg_reward,
           self.global_step
       ]
-      doc_strs, summary_strs = others
+      doc_strs, summary_strs = others[:2]
 
       results = sess.run(
           to_return,
@@ -784,7 +794,7 @@ class CoherentExtractRF(BaseModel):
               self._target_weights: target_weights
           })
     else:  # with coherence or rouge
-      doc_strs, summary_strs = others
+      doc_strs, summary_strs = others[:2]
       result = sess.run(
           [self._loss, self._avg_reward],
           feed_dict={
