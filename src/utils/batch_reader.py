@@ -265,26 +265,29 @@ class ExtractiveBatcher(object):
       np_rel_pos = np.array(pad_rel_pos, dtype=np.int32)
 
       # Skip those with no extractive summaries
-      if len(extract_ids) == 0:
-        continue
+      # if len(extract_ids) == 0:
+      #   continue
+
+      # np_target = np.zeros([hps.num_sents_doc], dtype=np.int32)
+      # for i in extract_ids:
+      #   if i < hps.num_sents_doc:
+      #     np_target[i] = 1
+
+      # if hps.trg_weight_norm > 0:
+      #   counts = data_sample.extract_counts
+      #   total_count = float(sum(counts))
+      #   weight_norm = hps.trg_weight_norm / (total_count + 0.01)
+      #   weights = [weight_norm * c for c in counts]  # normalize the weights
+
+      #   np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
+      #   for i, w in zip(extract_ids, weights):
+      #     if i < hps.num_sents_doc:
+      #       np_weights[i] = w
+      # else:
+      #   np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
 
       np_target = np.zeros([hps.num_sents_doc], dtype=np.int32)
-      for i in extract_ids:
-        if i < hps.num_sents_doc:
-          np_target[i] = 1
-
-      if hps.trg_weight_norm > 0:
-        counts = data_sample.extract_counts
-        total_count = float(sum(counts))
-        weight_norm = hps.trg_weight_norm / (total_count + 0.01)
-        weights = [weight_norm * c for c in counts]  # normalize the weights
-
-        np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
-        for i, w in zip(extract_ids, weights):
-          if i < hps.num_sents_doc:
-            np_weights[i] = w
-      else:
-        np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
+      np_weights = np.ones([hps.num_sents_doc], dtype=np.float32)
 
       try:
         summary = data_sample.summary

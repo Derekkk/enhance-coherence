@@ -1,8 +1,10 @@
 """ Evaluate performance. """
 import pdb
 import argparse
+from nltk import word_tokenize
 from nltk.tokenize import sent_tokenize
 import time
+import re
 
 # Import pythonrouge package
 from pythonrouge import PythonROUGE
@@ -23,9 +25,9 @@ def eval_rouge(in_path):
       ROUGE_L=True,
       stemming=True,
       stopwords=False,
-      length_limit=False,
+      length_limit=True,
       length=75,
-      word_level=False,
+      word_level=True,
       use_cf=True,
       cf=95,
       ROUGE_W=False,
@@ -45,15 +47,17 @@ def eval_rouge(in_path):
       sys_start = l.find(sys_tag) + len(sys_tag)
       sys_end = l.find(ref_tag)
       sys_str = l[sys_start:sys_end].strip()
+      sys_sent_list = sys_str.split(sentence_sep)
 
       ref_start = sys_end + len(ref_tag)
       ref_str = l[ref_start:].strip()
-
-      sys_sent_list = sys_str.split(sentence_sep)
-      ref_sent_list = ref_str.split(sentence_sep)
+      references = [
+          x.strip() for x in re.split("<model_\w>", ref_str) if x.strip()
+      ]
+      ref_list = [[" ".join(word_tokenize(r))] for r in references]
 
       summary.append([sys_sent_list])
-      reference.append([ref_sent_list])
+      reference.append(ref_list)
       num_samples += 1
 
   start_time = time.time()

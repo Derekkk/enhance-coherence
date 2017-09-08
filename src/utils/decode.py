@@ -195,7 +195,7 @@ class SummaRuNNerRFDecoder(object):
     result_list = []
     bs = BeamSearch(self._model, self._hps)
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     for next_batch in batch_reader:
       enc_batch, enc_doc_lens, enc_sent_lens, sent_rel_pos, _, _, others = next_batch
