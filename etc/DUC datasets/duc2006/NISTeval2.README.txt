@@ -1,0 +1,30 @@
+DUC 2006 Results of Secondary Automatic Evaluation
+==================================================
+
+After summaries were manually evaluated for DUC 2006, it was
+discovered that there was a bug in the script for truncating the
+automatic summaries that were submitted for evaluation; it was found
+that a number of summaries had been erroneously truncated to fewer
+than 250 words before being evaluated in the official manual
+(Responsiveness, Linguistic Quality, Pyramid) and automatic (ROUGE,
+BE) evaluations.
+
+The file "length_adjustment.txt" lists the change in length (in words)
+between the initial and correctly truncated summaries, for each
+{runid,docset} affected by the bug in the truncation script.
+
+This directory contains the results of running ROUGE/BE on the
+correctly truncated summaries.  All other parameters are the same as
+in the initial automatic evaluations.
+
+
+Files under ROUGE/:
+   peers/		sentence-segmented human and automatic summaries
+   rougejk.m.out	output of ROUGE-1.5.5
+   rouge2.jk.m.avg	average ROUGE-2 recall, by summarizer ID
+   rougeSU4.jk.m.avg	average ROUGE-SU4 recall, by summarizer ID
+
+Files under BE/:
+   BEpeers/			BEs from human and automatic summaries
+   simplejk.m.hm.out		output of ROUGE-1.5.5
+   simple.jk.m.hm.avg		average BE recall, by summarizer ID

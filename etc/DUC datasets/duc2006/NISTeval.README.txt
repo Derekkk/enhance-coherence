@@ -1,0 +1,104 @@
+DUC 2006 Evaluated Results
+==========================
+
+This is the README file for the manual and automatic evaluation that
+was done at NIST for the DUC 2006 summaries.
+
+Ten NIST assessors wrote summaries for the 50 DUC2006 topics.  Each
+topic had 4 human summaries.  The human summarizer IDs are A-J.
+
+NIST created a baseline system that simply returned all the leading
+sentences (up to 250 words) in the <TEXT> field of the most recent
+document.  The baseline summarizer ID is 1.
+
+NIST received submissions from 34 different participants.  The
+participants' summarizer IDs are 2-35.
+
+All summaries were truncated to 250 words before being evaluated.
+
+
+
+Linguistic Quality
+------------------
+
+NIST assessors judged each summary for linguistic quality. Five
+Quality Questions were used:
+	1. Grammaticality
+	2. Non-redundancy
+	3. Referential clarity
+	4. Focus
+	5. Structure and Coherence
+
+(See the DUC2006 Task Description for a detailed description of each
+quality question.)
+
+Files under linguistic_quality/:
+   linguistic_quality.table	scores for linguistic quality questions
+
+
+
+Responsiveness
+--------------
+
+NIST assessors assigned a content responsiveness score to each of the
+automatic and human summaries.  The content score is an integer between 1
+(very poor) and 5 (very good) and is based on the amount of
+information in the summary that helps to satisfy the information need
+expressed in the topic.
+
+The assessor also used the same scale (1=very poor...5=very good) to
+assign an overall responsiveness score to each summary, where the
+overall score is based on both the readability of the summary and the
+amount of information in the summary that helps to satisfy the
+information need expressed in the topic.
+
+Files under responsiveness/:
+   content.table		content responsiveness scores
+   avg_content			average of content score, by summarizer ID
+
+   overall.table		overall responsiveness scores
+   avg_overall			average of overall score, by summarizer ID
+
+
+
+ROUGE
+-----
+
+ROUGE-2 and ROUGE-SU4 scores were computed by running ROUGE-1.5.5 with
+stemming but no removal of stopwords.  The input file implemented
+jackknifing so that scores of systems and humans could be compared.
+
+ROUGE run-time parameters:
+	ROUGE-1.5.5.pl -n 4 -w 1.2 -m  -2 4 -u -c 95 -r 1000 -f A -p 0.5 -t 0 -a -d rougejk.in 
+
+Files under ROUGE/:
+   models/		sentence-segmented human summaries
+   peers/		sentence-segmented human and automatic summaries
+   rougejk.in		input file to ROUGE-1.5.5
+   rougejk.m.out	output of ROUGE-1.5.5
+   rouge2.jk.m.avg	average ROUGE-2 recall, by summarizer ID
+   rougeSU4.jk.m.avg	average ROUGE-SU4 recall, by summarizer ID
+
+
+
+Basic Elements
+--------------
+
+Basic Elements (BE) scores were computed by first using the tools in
+BE-1.1 to extract BE-F from each sentence-segmented <summary>:
+   bebreakMinipar.pl -p $MINIPATH <summary>
+
+The BE-F were then matched by running ROUGE-1.5.5 with stemming, using
+the Head-Modifier (HM) matching criterion.  The input file to
+ROUGE-1.5.5 implemented jackknifing so that scores of systems and
+humans could be compared.
+
+BE run-time parameters:
+	ROUGE-1.5.5.pl -m -a -d -3 HM simplejk.in  
+
+Files under BE/:
+   BEmodels/			BEs from human summaries
+   BEpeers/			BEs from human and automatic summaries
+   simplejk.in			input file to ROUGE-1.5.5
+   simplejk.m.hm.out		output of ROUGE-1.5.5
+   simple.jk.m.hm.avg		average BE recall, by summarizer ID

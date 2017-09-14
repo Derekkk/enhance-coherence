@@ -1,7 +1,10 @@
 \documentclass[]{article}
 
+\usepackage[round]{natbib}
+
+
 %opening
-\title{Enhancing Coherence for Neural Extractive Summarization with Reinforcement Learning}  % may include Adversarial Training (or named as CoherenceGAN) as well
+\title{Improving Coherence of Neural Extractive Summarization with Reinforcement Learning}  % may include Adversarial Training (or named as CoherenceGAN) as well
 \author{Jimmy Wu}
 
 \begin{document}
@@ -20,6 +23,8 @@ Evaluation and conclusion: WIP \\
 \section{Introduction}
 
 
+
+
 \section{Related Works}
 Limitations of previous extractive summarization models using Deep Learning:
 \begin{enumerate}
@@ -34,9 +39,21 @@ Drawbacks of previous methods that tries to enhance coherence for summaries:
 	\item The introduction of coherence is often through post-processing. It does not directly effect the probability that a sentence is chosen? (this is doubtful)
 \end{enumerate}
 
+Related works are summarized as follows:
+
+\citep{nayeem2017extract}: MDS setting. Use TextRank + RAKE ensemble to select sentences. Coherence defined as sum of similarities of all adjacent sentences. A greedy selection algorithm is used to get an ordering of the selected sentences. \textbf{Limitation}: BOW feature ignores sequential information in sentence. Sentence-to-sentence coherence is limited in modeling coherence among multiple sentences. Multi-stage, not end-to-end. \textbf{Inspiration}: could use automatic evaluation metric.
+
+
+
+
+
+
+
 
 \section{Model}
 
+\bibliographystyle{plainnat}
+\bibliography{foo}
 
 
 \end{document}

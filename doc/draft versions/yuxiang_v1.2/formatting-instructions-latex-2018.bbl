@@ -1,0 +1,220 @@
+\begin{thebibliography}{}
+
+\bibitem[\protect\citeauthoryear{Ayana \bgroup et al\mbox.\egroup
+  }{2016}]{ayana2016}
+Ayana; Shen, S.; Liu, Z.; and Sun, M.
+\newblock 2016.
+\newblock Neural headline generation with minimum risk training.
+\newblock {\em CoRR} abs/1604.01904.
+
+\bibitem[\protect\citeauthoryear{Bahdanau, Cho, and
+  Bengio}{2014}]{cho-translation}
+Bahdanau, D.; Cho, K.; and Bengio, Y.
+\newblock 2014.
+\newblock Neural machine translation by jointly learning to align and
+  translate.
+\newblock {\em CoRR} abs/1409.0473.
+
+\bibitem[\protect\citeauthoryear{Barzilay and Lapata}{2008}]{entitygrid}
+Barzilay, R., and Lapata, M.
+\newblock 2008.
+\newblock Modeling local coherence: An entity-based approach.
+\newblock {\em Comput. Linguist.} 34(1):1--34.
+
+\bibitem[\protect\citeauthoryear{Berg-Kirkpatrick, Gillick, and
+  Klein}{2011}]{ilp}
+Berg-Kirkpatrick, T.; Gillick, D.; and Klein, D.
+\newblock 2011.
+\newblock Jointly learning to extract and compress.
+\newblock In {\em Proceedings of the 49th Annual Meeting of the Association for
+  Computational Linguistics: Human Language Technologies - Volume 1}, HLT '11,
+  481--490.
+\newblock Stroudsburg, PA, USA: Association for Computational Linguistics.
+
+\bibitem[\protect\citeauthoryear{Bird, Klein, and Loper}{2009}]{nltk}
+Bird, S.; Klein, E.; and Loper, E.
+\newblock 2009.
+\newblock {\em Natural Language Processing with Python}.
+\newblock O'Reilly Media, Inc., 1st edition.
+
+\bibitem[\protect\citeauthoryear{Cheng and Lapata}{2016}]{jianpeng2016}
+Cheng, J., and Lapata, M.
+\newblock 2016.
+\newblock Neural summarization by extracting sentences and words.
+\newblock In {\em Proceedings of the 54th Annual Meeting of the Association for
+  Computational Linguistics, {ACL} 2016, August 7-12, 2016, Berlin, Germany,
+  Volume 1: Long Papers}.
+
+\bibitem[\protect\citeauthoryear{Chung \bgroup et al\mbox.\egroup
+  }{2014}]{chung2014empirical}
+Chung, J.; Gulcehre, C.; Cho, K.; and Bengio, Y.
+\newblock 2014.
+\newblock Empirical evaluation of gated recurrent neural networks on sequence
+  modeling.
+\newblock {\em arXiv preprint arXiv:1412.3555}.
+
+\bibitem[\protect\citeauthoryear{Dahl, Sainath, and Hinton}{2013}]{relu}
+Dahl, G.~E.; Sainath, T.~N.; and Hinton, G.~E.
+\newblock 2013.
+\newblock Improving deep neural networks for lvcsr using rectified linear units
+  and dropout.
+\newblock In {\em Proceedings of ICASSP}.
+
+\bibitem[\protect\citeauthoryear{Erkan and Radev}{2004}]{graph_based}
+Erkan, G., and Radev, D.~R.
+\newblock 2004.
+\newblock Lexrank: Graph-based lexical centrality as salience in text
+  summarization.
+\newblock {\em J. Artif. Int. Res.} 22(1):457--479.
+
+\bibitem[\protect\citeauthoryear{Hermann \bgroup et al\mbox.\egroup
+  }{2015}]{hermann_teaching_2015}
+Hermann, K.~M.; Kocisky, T.; Grefenstette, E.; Espeholt, L.; Kay, W.; Suleyman,
+  M.; and Blunsom, P.
+\newblock 2015.
+\newblock Teaching machines to read and comprehend.
+\newblock In {\em Advances in {Neural} {Information} {Processing} {Systems}},
+  1693--1701.
+
+\bibitem[\protect\citeauthoryear{Hu \bgroup et al\mbox.\egroup
+  }{2014}]{NIPS2014_hu}
+Hu, B.; Lu, Z.; Li, H.; and Chen, Q.
+\newblock 2014.
+\newblock Convolutional neural network architectures for matching natural
+  language sentences.
+\newblock In {\em Advances in Neural Information Processing Systems 27},
+  2042--2050.
+
+\bibitem[\protect\citeauthoryear{Hu \bgroup et al\mbox.\egroup
+  }{2016}]{nc_baotian}
+Hu, B.; Tang, B.; Chen, Q.; and Kang, L.
+\newblock 2016.
+\newblock A novel word embedding learning model using the dissociation between
+  nouns and verbs.
+\newblock {\em Neurocomput.} 171(C):1108--1117.
+
+\bibitem[\protect\citeauthoryear{Hu, Chen, and Zhu}{2015}]{lcsts}
+Hu, B.; Chen, Q.; and Zhu, F.
+\newblock 2015.
+\newblock {LCSTS:} {A} large scale chinese short text summarization dataset.
+\newblock {\em CoRR} abs/1506.05865.
+
+\bibitem[\protect\citeauthoryear{LeCun and Bengio}{1995}]{cnn}
+LeCun, Y., and Bengio, Y.
+\newblock 1995.
+\newblock Convolutional networks for images, speech and time series.
+\newblock {\em The Handbook of Brain Theory and Neural Networks} 3361.
+
+\bibitem[\protect\citeauthoryear{Li and Hovy}{2014}]{jiweili2014}
+Li, J., and Hovy, E.~H.
+\newblock 2014.
+\newblock A model of coherence based on distributed sentence representation.
+\newblock In Moschitti, A.; Pang, B.; and Daelemans, W., eds., {\em EMNLP},
+  2039--2048.
+\newblock ACL.
+
+\bibitem[\protect\citeauthoryear{Lin}{2004}]{rouge}
+Lin, C.-Y.
+\newblock 2004.
+\newblock Rouge: A package for automatic evaluation of summaries.
+\newblock In Marie-Francine~Moens, S.~S., ed., {\em Text Summarization Branches
+  Out: Proceedings of the ACL-04 Workshop},  74--81.
+\newblock Barcelona, Spain: Association for Computational Linguistics.
+
+\bibitem[\protect\citeauthoryear{Mikolov \bgroup et al\mbox.\egroup
+  }{2013}]{word2vec}
+Mikolov, T.; Chen, K.; Corrado, G.; and Dean, J.
+\newblock 2013.
+\newblock Efficient estimation of word representations in vector space.
+\newblock {\em CoRR} abs/1301.3781.
+
+\bibitem[\protect\citeauthoryear{Nallapati \bgroup et al\mbox.\egroup
+  }{2016}]{nallapati_ramesh_abstractive_2016}
+Nallapati, R.; Zhou, B.; Gulcehre, C.; and Xiang, B.
+\newblock 2016.
+\newblock Abstractive {Text} {Summarization} using {Sequence}-to-sequence
+  {RNNs} and {Beyond}.
+\newblock In {\em Proceedings of the 20th \{{SIGNLL}\} {Conference} on
+  {Computational} {Natural} {Language} {Learning}}.
+
+\bibitem[\protect\citeauthoryear{Nallapati, Zhai, and Zhou}{2017}]{SummaRuNNer}
+Nallapati, R.; Zhai, F.; and Zhou, B.
+\newblock 2017.
+\newblock Summarunner: {A} recurrent neural network based sequence model for
+  extractive summarization of documents.
+\newblock In {\em Proceedings of the Thirty-First {AAAI} Conference on
+  Artificial Intelligence, February 4-9, 2017, San Francisco, California,
+  {USA.}},  3075--3081.
+
+\bibitem[\protect\citeauthoryear{Nayeem and Chali}{2017}]{nayeem2017extract}
+Nayeem, M.~T., and Chali, Y.
+\newblock 2017.
+\newblock Extract with order for coherent multi-document summarization.
+\newblock {\em TextGraphs-11} ~51.
+
+\bibitem[\protect\citeauthoryear{Nguyen and Joty}{2017}]{nlcm}
+Nguyen, D.~T., and Joty, S.~R.
+\newblock 2017.
+\newblock A neural local coherence model.
+\newblock In {\em Proceedings of the 55th Annual Meeting of the Association for
+  Computational Linguistics, {ACL} 2017, Vancouver, Canada, July 30 - August 4,
+  Volume 1: Long Papers},  1320--1330.
+
+\bibitem[\protect\citeauthoryear{Nguyen, Boyd-Graber, and Daume}{2017}]{rl2nmt}
+Nguyen, K.; Boyd-Graber, J.; and Daume, H.~I.
+\newblock 2017.
+\newblock Reinforcement learning for bandit neural machine translation with
+  simulated human feedback.
+\newblock In {\em Empirical Methods in Natural Language Processing}.
+
+\bibitem[\protect\citeauthoryear{Paulus, Xiong, and
+  Socher}{2017}]{socher2017_summarization}
+Paulus, R.; Xiong, C.; and Socher, R.
+\newblock 2017.
+\newblock A deep reinforced model for abstractive summarization.
+\newblock {\em CoRR} abs/1705.04304.
+
+\bibitem[\protect\citeauthoryear{Ranzato \bgroup et al\mbox.\egroup
+  }{2015}]{sltrnn2016}
+Ranzato, M.; Chopra, S.; Auli, M.; and Zaremba, W.
+\newblock 2015.
+\newblock Sequence level training with recurrent neural networks.
+\newblock {\em CoRR} abs/1511.06732.
+
+\bibitem[\protect\citeauthoryear{Rush, Chopra, and Weston}{2015}]{fb2015}
+Rush, A.~M.; Chopra, S.; and Weston, J.
+\newblock 2015.
+\newblock A neural attention model for abstractive sentence summarization.
+\newblock In {\em EMNLP},  379--389.
+
+\bibitem[\protect\citeauthoryear{See, Liu, and Manning}{2017}]{see_get_2017}
+See, A.; Liu, P.~J.; and Manning, C.~D.
+\newblock 2017.
+\newblock Get {To} {The} {Point}: {Summarization} with {Pointer}-{Generator}
+  {Networks}.
+\newblock {\em arXiv:1704.04368 [cs]}.
+\newblock arXiv: 1704.04368.
+
+\bibitem[\protect\citeauthoryear{Tang, Qin, and Liu}{2015}]{duyutang-sentiment}
+Tang, D.; Qin, B.; and Liu, T.
+\newblock 2015.
+\newblock Document modeling with gated recurrent neural network for sentiment
+  classification.
+\newblock In {\em Proceedings of the 2015 Conference on Empirical Methods in
+  Natural Language Processing},  1422--1432.
+\newblock Lisbon, Portugal: Association for Computational Linguistics.
+
+\bibitem[\protect\citeauthoryear{Williams}{1992}]{williams_simple_1992}
+Williams, R.~J.
+\newblock 1992.
+\newblock Simple statistical gradient-following algorithms for connectionist
+  reinforcement learning.
+\newblock {\em Machine learning} 8(3-4):229--256.
+
+\bibitem[\protect\citeauthoryear{Yao, Wan, and Xiao}{2017}]{Yao2017RecentAI}
+Yao, J.; Wan, X.; and Xiao, J.
+\newblock 2017.
+\newblock Recent advances in document summarization.
+\newblock {\em Knowledge and Information Systems}  1--40.
+
+\end{thebibliography}
